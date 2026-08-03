@@ -49,3 +49,34 @@ def test_backtest_nav_starts_at_1(sample_data):
     result = run_backtest(sample_data, window=20)
     first_valid = result['strategy_nav'].dropna().iloc[0]
     assert first_valid == pytest.approx(1.0, abs=0.01)
+
+
+from backtester import calculate_statistics
+
+
+def test_statistics_structure():
+    """统计结果应包含关键指标"""
+    df = pd.DataFrame({
+        'strategy_nav': [1.0, 1.05, 1.10, 1.08, 1.15],
+        'cy_nav': [1.0, 1.02, 1.04, 1.03, 1.06],
+        'hl_nav': [1.0, 1.01, 1.015, 1.02, 1.025],
+        'position': [0, 1, 1, 0, -1],
+        'strategy_return': [0.0, 0.05, 0.0476, -0.0182, 0.0648]
+    })
+    stats = calculate_statistics(df)
+    assert 'total_return' in stats
+    assert 'annualized_return' in stats
+    assert 'max_drawdown' in stats
+    assert 'sharpe_ratio' in stats
+    assert 'win_rate' in stats
+
+
+def test_max_drawdown_calculation():
+    """最大回撤计算正确"""
+    df = pd.DataFrame({
+        'strategy_nav': [1.0, 1.2, 1.1, 1.0, 1.3],
+        'strategy_return': [0.0, 0.2, -0.0833, -0.0909, 0.3]
+    })
+    stats = calculate_statistics(df)
+    # 从 1.2 跌到 1.0，回撤 = (1.2 - 1.0) / 1.2 = 16.67%
+    assert stats['max_drawdown'] == pytest.approx(0.1667, abs=0.01)

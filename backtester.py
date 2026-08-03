@@ -55,3 +55,50 @@ def run_backtest(
     result['hl_nav'] = (1 + result['hl_return'].fillna(0)).cumprod()
 
     return result
+
+
+def calculate_statistics(df: pd.DataFrame) -> dict:
+    """
+    计算回测统计指标
+    Returns:
+        dict with keys: total_return, annualized_return, max_drawdown, sharpe_ratio, win_rate
+    """
+    nav = df['strategy_nav'].dropna()
+    returns = df['strategy_return'].dropna()
+
+    if len(nav) < 2:
+        return {
+            'total_return': 0.0,
+            'annualized_return': 0.0,
+            'max_drawdown': 0.0,
+            'sharpe_ratio': 0.0,
+            'win_rate': 0.0
+        }
+
+    # 总收益率
+    total_return = (nav.iloc[-1] / nav.iloc[0]) - 1
+
+    # 年化收益率（252 交易日）
+    n_days = len(nav)
+    annualized_return = (1 + total_return) ** (252 / n_days) - 1
+
+    # 最大回撤
+    cummax = nav.cummax()
+    drawdown = (cummax - nav) / cummax
+    max_drawdown = drawdown.max()
+
+    # 夏普比率
+    risk_free_daily = STRATEGY_CONFIG['risk_free_rate'] / 252
+    excess_returns = returns - risk_free_daily
+    sharpe_ratio = (excess_returns.mean() / excess_returns.std()) * (252 ** 0.5) if excess_returns.std() > 0 else 0.0
+
+    # 胜率
+    win_rate = (returns > 0).sum() / len(returns) if len(returns) > 0 else 0.0
+
+    return {
+        'total_return': total_return,
+        'annualized_return': annualized_return,
+        'max_drawdown': max_drawdown,
+        'sharpe_ratio': sharpe_ratio,
+        'win_rate': win_rate
+    }
