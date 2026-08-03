@@ -109,7 +109,7 @@
 | 用途 | 函数 | 说明 |
 |------|------|------|
 | 历史日线 | `ak.index_zh_a_hist(symbol="399006")` | 返回日期、收盘等字段 |
-| 实时行情 | `ak.stock_zh_index_daily_em(symbol="sz399006")` | 轻量级单指数查询，避免拉取全市场数据 |
+| 实时行情 | `ak.stock_zh_index_spot_sina(symbol="sz399006")` | 新浪实时接口，盘中获取当天涨跌幅，速度快 |
 
 > **为什么不用 `ak.stock_zh_index_spot_em()`？**
 > 该接口抓取全市场数千个指数的实时行情，高峰期耗时 3-5 秒，容易超时。改用单指数查询接口，响应速度快且稳定。
@@ -126,13 +126,14 @@ def load_historical_data(symbol):
 def get_realtime_change(spot_code):
     """
     获取单指数盘中实时涨跌幅（轻量级）
+    使用新浪实时接口，盘中可获取当天最新涨跌幅
     返回: float, 如 0.015 表示涨 1.5%
     注意：返回的是涨跌幅而非绝对价格，用于增量更新比值
     """
-    df = ak.stock_zh_index_daily_em(symbol=spot_code)
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
-    return (latest['close'] - prev['close']) / prev['close']
+    df = ak.stock_zh_index_spot_sina(symbol=spot_code)
+    if not df.empty:
+        return float(df.iloc[0]['涨跌幅']) / 100.0
+    return 0.0
 ```
 
 ### 数据合并与比值计算
@@ -420,7 +421,8 @@ def backtest_signals(df, window=750, low_pct=0.1, high_pct=0.9):
     df['signal'] = df['signal'].diff().fillna(0).apply(
         lambda x: 1 if x > 0 else (-1 if x < 0 else 0)
     )
-    df['signal'] = df['signal'].replace(0, method='ffill').fillna(0)
+    # 规范的持仓前向填充方式（兼容 Pandas 2.1+）
+    df['signal'] = df['signal'].replace(0, None).ffill().fillna(0)
 
     # 4. T+1 执行（延迟一天交易，避免 look-ahead bias）
     df['position'] = df['signal'].shift(1)

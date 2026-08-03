@@ -182,20 +182,20 @@ Append to `data_loader.py`:
 def get_realtime_change(spot_code: str) -> float:
     """
     获取单指数盘中实时涨跌幅（轻量级）
+    使用新浪实时接口，盘中可获取当天最新涨跌幅
     Args:
         spot_code: 如 'sz399006'
     Returns:
         float, 如 0.015 表示涨 1.5%
     """
     try:
-        df = ak.stock_zh_index_daily_em(symbol=spot_code)
-        if len(df) < 2:
-            return 0.0
-        latest = df.iloc[-1]
-        prev = df.iloc[-2]
-        return (latest['close'] - prev['close']) / prev['close']
+        # 新浪实时接口，速度快且盘中实时更新
+        df = ak.stock_zh_index_spot_sina(symbol=spot_code)
+        if not df.empty:
+            return float(df.iloc[0]['涨跌幅']) / 100.0
+        return 0.0
     except Exception as e:
-        st.error(f"获取实时行情失败 ({spot_code}): {e}")
+        st.warning(f"获取实时行情失败 ({spot_code}): {e}")
         return 0.0
 ```
 
@@ -621,7 +621,8 @@ def run_backtest(
     result.loc[result['percentile'] >= high_pct, 'signal'] = -1
 
     # 3. 信号去重（仅保留状态变化，前向填充持仓）
-    result['signal'] = result['signal'].replace(0, method='ffill').fillna(0)
+    # 规范的持仓前向填充方式（兼容 Pandas 2.1+）
+    result['signal'] = result['signal'].replace(0, None).ffill().fillna(0)
 
     # 4. T+1 执行（延迟一天交易）
     result['position'] = result['signal'].shift(1)
@@ -861,22 +862,44 @@ def main():
 
 def render_signal_tab(merged_data: pd.DataFrame):
     """Tab 1: 实时信号"""
+    # 信号卡片：使用 @st.fragment 局部刷新，不影响下方图表
+    render_realtime_card(merged_data)
+
+    # 比值历史走势图（不随 fragment 刷新）
+    st.subheader("比值历史走势")
+    percentiles = calculate_rolling_percentile(merged_data['ratio'], STRATEGY_CONFIG['rolling_window'])
+    render_ratio_chart(merged_data, percentiles)
+
+    # 指数对比图
+    st.subheader("指数对比")
+    render_index_comparison(merged_data)
+
+
+@st.fragment(run_every=300)  # Streamlit >= 1.37，每5分钟局部刷新
+def render_realtime_card(merged_data: pd.DataFrame):
+    """信号卡片：独立局部刷新，不重绘下方图表"""
     st.subheader("当前信号")
 
-    # 计算当前比值和分位
-    ratio = merged_data['ratio'].iloc[-1]
-    percentiles = calculate_rolling_percentile(merged_data['ratio'], STRATEGY_CONFIG['rolling_window'])
+    # 增量计算：用涨跌幅更新最新比值
+    yesterday_ratio = merged_data['ratio'].iloc[-1]
+    cy_change = get_realtime_change(STRATEGY_CONFIG['symbol_a']['spot_code'])
+    hl_change = get_realtime_change(STRATEGY_CONFIG['symbol_b']['spot_code'])
+    today_ratio = yesterday_ratio * (1 + cy_change) / (1 + hl_change)
+
+    # 计算滚动分位
+    ratio_series = pd.concat([merged_data['ratio'], pd.Series([today_ratio])])
+    percentiles = calculate_rolling_percentile(ratio_series, STRATEGY_CONFIG['rolling_window'])
     percentile = percentiles.iloc[-1]
 
     # 获取信号
     prev_state = st.session_state.get('prev_state', 'neutral')
-    display, new_state, event = calculate_signal(ratio, percentile, prev_state)
+    display, new_state, event = calculate_signal(today_ratio, percentile, prev_state)
     st.session_state['prev_state'] = new_state
 
     # 信号卡片
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("当前比值", f"{ratio:.4f}")
+        st.metric("当前比值", f"{today_ratio:.4f}")
     with col2:
         st.metric("滚动分位", f"{percentile:.1%}")
     with col3:
@@ -895,19 +918,12 @@ def render_signal_tab(merged_data: pd.DataFrame):
         st.balloons()
         st.toast(f"🔔 新信号：{event['signal']}！", icon="🚨")
 
-    # 比值历史走势图
-    st.subheader("比值历史走势")
-    render_ratio_chart(merged_data, percentiles)
-
-    # 指数对比图
-    st.subheader("指数对比")
-    render_index_comparison(merged_data)
-
 
 def render_ratio_chart(merged_data: pd.DataFrame, percentiles: pd.Series):
-    """绘制比值历史走势图"""
+    """绘制比值历史走势图（含动态滚动阈值边界）"""
     import plotly.graph_objects as go
 
+    window = STRATEGY_CONFIG['rolling_window']
     fig = go.Figure()
 
     # 使用 Scattergl 提升大数据集性能
@@ -919,11 +935,20 @@ def render_ratio_chart(merged_data: pd.DataFrame, percentiles: pd.Series):
         line=dict(color='royalblue', width=2)
     ))
 
-    # 阈值区域
-    fig.add_hline(y=STRATEGY_CONFIG['low_percentile'], line_dash="dash", line_color="red",
-                  annotation_text="抄底线 10%")
-    fig.add_hline(y=STRATEGY_CONFIG['high_percentile'], line_dash="dash", line_color="green",
-                  annotation_text="逃顶线 90%")
+    # 动态滚动阈值边界（rolling quantile of the actual ratio values）
+    rolling_low = merged_data['ratio'].rolling(window).quantile(STRATEGY_CONFIG['low_percentile'])
+    rolling_high = merged_data['ratio'].rolling(window).quantile(STRATEGY_CONFIG['high_percentile'])
+
+    fig.add_trace(go.Scattergl(
+        x=merged_data['date'], y=rolling_low,
+        mode='lines', name='抄底边界 (10%)',
+        line=dict(dash='dash', color='red', width=1)
+    ))
+    fig.add_trace(go.Scattergl(
+        x=merged_data['date'], y=rolling_high,
+        mode='lines', name='逃顶边界 (90%)',
+        line=dict(dash='dash', color='green', width=1)
+    ))
 
     fig.update_layout(
         xaxis_title="日期",
