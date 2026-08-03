@@ -48,3 +48,23 @@ def load_merged_data() -> pd.DataFrame:
     merged = merged.dropna()
     merged['ratio'] = merged['close_cy'] / merged['close_hl']
     return merged.reset_index(drop=True)
+
+
+def get_realtime_change(spot_code: str) -> float:
+    """
+    获取单指数盘中实时涨跌幅（轻量级）
+    使用新浪实时接口，盘中可获取当天最新涨跌幅
+    Args:
+        spot_code: 如 'sz399006'
+    Returns:
+        float, 如 0.015 表示涨 1.5%
+    """
+    try:
+        # 新浪实时接口，速度快且盘中实时更新
+        df = ak.stock_zh_index_spot_sina(symbol=spot_code)
+        if not df.empty:
+            return float(df.iloc[0]['涨跌幅']) / 100.0
+        return 0.0
+    except Exception as e:
+        st.warning(f"获取实时行情失败 ({spot_code}): {e}")
+        return 0.0
