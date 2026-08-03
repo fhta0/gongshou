@@ -33,8 +33,8 @@ def run_backtest(
     result.loc[result['percentile'] <= low_pct, 'signal'] = 1
     result.loc[result['percentile'] >= high_pct, 'signal'] = -1
 
-    # 3. 信号去重（兼容 Pandas 2.1+）
-    result['signal'] = result['signal'].replace(0, None).ffill().fillna(0)
+    # 3. 信号去重（前向填充持仓，兼容 Pandas 2.1+）
+    result['signal'] = result['signal'].mask(result['signal'] == 0).ffill().fillna(0)
 
     # 4. T+1 执行
     result['position'] = result['signal'].shift(1)
