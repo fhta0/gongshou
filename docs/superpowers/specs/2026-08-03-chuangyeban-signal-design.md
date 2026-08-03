@@ -123,10 +123,16 @@ def load_historical_data(symbol):
     df = ak.index_zh_a_hist(symbol=symbol)
     return df[['日期', '收盘']].rename(columns={'日期': 'date', '收盘': 'close'})
 
-def get_realtime_quote(symbol):
-    """获取单指数实时报价（轻量级）"""
-    df = ak.stock_zh_index_daily_em(symbol=symbol)
-    return df.iloc[-1]['close']  # 最新收盘价
+def get_realtime_change(spot_code):
+    """
+    获取单指数盘中实时涨跌幅（轻量级）
+    返回: float, 如 0.015 表示涨 1.5%
+    注意：返回的是涨跌幅而非绝对价格，用于增量更新比值
+    """
+    df = ak.stock_zh_index_daily_em(symbol=spot_code)
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
+    return (latest['close'] - prev['close']) / prev['close']
 ```
 
 ### 数据合并与比值计算
@@ -364,29 +370,28 @@ if is_trading_hours():
 def realtime_signal_widget():
     """
     仅刷新信号区块，不影响下方图表
-    优化：只抓取最新单 Tick 报价，拼接到已缓存的历史数据末尾
-    避免每次重算整条历史时间序列
+    优化：只抓取最新涨跌幅，用增量方式更新比值
+    避免全收益指数与价格指数点位不一致的问题
     """
-    # 仅获取最新报价（~100ms）
-    cy_price = get_realtime_quote('sz399006')
-    hl_price = get_realtime_quote('sh000922')
-
-    # 拼接到缓存的历史数据最后一行
+    # 获取昨日收盘比值（来自缓存的历史数据最后一行）
     historical = st.session_state['merged_data']
-    latest = pd.DataFrame([{
-        'date': pd.Timestamp.now().normalize(),
-        'close_cy': cy_price,
-        'close_hl': hl_price,
-        'ratio': cy_price / hl_price
-    }])
-    updated = pd.concat([historical.iloc[:-1], latest], ignore_index=True)
+    yesterday_ratio = historical['ratio'].iloc[-1]
 
-    # 仅计算最后一个点的滚动分位（利用已缓存的历史分位）
-    ratio = updated['ratio'].iloc[-1]
-    percentile = updated['ratio'].iloc[-1] / updated['ratio'].rolling(750).max().iloc[-1]
+    # 获取盘中实时涨跌幅（轻量级接口，~100ms）
+    cy_change = get_realtime_change('sz399006')  # 创业板实时涨跌幅
+    hl_change = get_realtime_change('sh000922')  # 红利价格指数实时涨跌幅
+
+    # 增量计算今日比值（避免全收益/价格指数基数不一致）
+    # Today Ratio = Yesterday Ratio × (1 + 创业板涨跌幅) / (1 + 红利涨跌幅)
+    today_ratio = yesterday_ratio * (1 + cy_change) / (1 + hl_change)
+
+    # 拼接到历史比值序列，计算滚动百分位
+    ratio_series = pd.concat([historical['ratio'], pd.Series([today_ratio])])
+    percentiles = calculate_rolling_percentile(ratio_series, window=750)
+    percentile = percentiles.iloc[-1]
 
     signal, new_state, event = calculate_signal(
-        ratio, percentile, st.session_state.get('prev_state', 'neutral')
+        today_ratio, percentile, st.session_state.get('prev_state', 'neutral')
     )
     st.session_state['prev_state'] = new_state
     # 渲染信号卡片...
@@ -465,13 +470,29 @@ def backtest_signals(df, window=750, low_pct=0.1, high_pct=0.9):
 ```
 chuangyeban/
 ├── app.py                 # UI 展现层 (Tabs, layout, st.fragment)
-├── config.py              # 配置项 (窗口大小 750, 阈值 0.1/0.9, 指数代码, 无风险利率)
+├── config.py              # 全局配置（指数代码、阈值、窗口、无风险利率等）
 ├── data_loader.py         # AKShare 接口对接, @st.cache_data 数据清洗
 ├── strategy.py            # 向量化计算: 滚动百分位 (Rank法)、信号生成与防钝化
 ├── backtester.py          # 回测引擎: T+1 收益计算, 策略 NAV, 统计指标
 ├── requirements.txt       # 依赖
 └── .gitignore
 ```
+
+### config.py 内容
+
+```python
+STRATEGY_CONFIG = {
+    "symbol_a": {"code": "399006", "name": "创业板指", "spot_code": "sz399006"},
+    "symbol_b": {"code": "H20922", "name": "中证红利全收益", "spot_code": "sh000922"},
+    "rolling_window": 750,      # 3年交易日
+    "low_percentile": 0.10,     # 抄底阈值
+    "high_percentile": 0.90,    # 逃顶阈值
+    "risk_free_rate": 0.015,    # 年化无风险利率 1.5%
+    "cooldown_days": 20         # 信号冷却期（交易日）
+}
+```
+
+> **可扩展性**：后续如果要支持其他指数对（如沪深300/中证500、纳斯达克/标普500），只需修改 `config.py` 中的配置即可，无需改动核心逻辑。
 
 ## 依赖
 
