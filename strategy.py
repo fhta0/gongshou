@@ -288,9 +288,9 @@ def _state_to_event(state: str, action_type: str,
         if cy_momentum is not None and hl_momentum is not None:
             both_neg = cy_momentum < 0 and hl_momentum < 0
             if both_neg:
-                desc = '两者动量均为负'
+                desc = f'两者动量均为负（创业板 {cy_momentum:+.2%}，红利 {hl_momentum:+.2%}）'
             else:
-                desc = f'动量未达门槛（需 > {rf_period:.2%}）'
+                desc = f'动量未达门槛（需 > {rf_period:.2%}），当前：创业板 {cy_momentum:+.2%}，红利 {hl_momentum:+.2%}'
         else:
             desc = '动量条件不满足'
     else:
