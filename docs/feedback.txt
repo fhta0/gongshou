@@ -1,12 +1,16 @@
 ## 反馈处理记录
 
-### 2026-08-04 已完成
+### 2026-08-04 第二轮修复
+
+- [x] 百分位区域着色：add_hrect 改为 add_vrect 按时间轴分段（低位绿/中间灰/高位红）
+- [x] 信号强度规则对齐 spec：低位买cy=强信号, 高位买hl=强信号, 高位买cy需动量百分位验证
+- [x] 消除硬编码 0.7 → 使用 STRATEGY_CONFIG['high_cy_mom_pct_threshold']
+- [x] 修复 cy_mom_pct_today falsy 0 bug → 使用 `is not None`
+- [x] backtester signal_strength 已实际计算（34/34 tests pass，1000行数据验证非空）
+
+### 2026-08-04 第一轮已完成
 
 - [x] 实时卡片百分位显示（比值百分位 + 动量百分位）
 - [x] 比值图百分位面板（区域着色 + 第三面板百分位走势）
 - [x] 回测对比模式（两策略净值叠加 + 信号强度标签）
-- [x] 冷却状态持久化（.last_switch.json 文件，页面刷新不丢失）
-
-### 待做（如有）
-
-暂无。
+- [x] 冷却状态持久化（.last_switch.json）

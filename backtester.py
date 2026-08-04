@@ -53,16 +53,30 @@ def run_backtest(
         result['signal'] = generate_signals(result, window)
 
     # 1b. 信号强度 + 动量百分位列
+    # spec: 低位买cy=强信号, 高位买hl=强信号, 高位买cy需动量百分位验证
     result['cy_momentum_percentile'] = cy_mom_pct
     result['hl_momentum_percentile'] = hl_mom_pct
+
+    low_pct = STRATEGY_CONFIG['low_percentile']
+    high_pct = STRATEGY_CONFIG['high_percentile']
+    high_cy_mom_threshold = STRATEGY_CONFIG['high_cy_mom_pct_threshold']
 
     signal_strength = pd.Series('空仓', index=result.index)
     signal_strength[result['signal'] == 1] = '普通'
     signal_strength[result['signal'] == -1] = '普通'
-    low_mask = result['ratio_percentile'] <= STRATEGY_CONFIG['low_percentile']
-    high_mask = result['ratio_percentile'] >= STRATEGY_CONFIG['high_percentile']
-    signal_strength[low_mask & (result['signal'] != 0)] = '强信号'
-    signal_strength[high_mask & (result['signal'] == 1) & (cy_mom_pct > 0.7)] = '强信号'
+    # 低位买创业板 → 强信号
+    signal_strength[
+        (result['ratio_percentile'] <= low_pct) & (result['signal'] == 1)
+    ] = '强信号'
+    # 高位买红利 → 强信号
+    signal_strength[
+        (result['ratio_percentile'] >= high_pct) & (result['signal'] == -1)
+    ] = '强信号'
+    # 高位买创业板 + 动量百分位 > 阈值 → 强信号
+    signal_strength[
+        (result['ratio_percentile'] >= high_pct) & (result['signal'] == 1)
+        & (cy_mom_pct > high_cy_mom_threshold)
+    ] = '强信号'
     result['signal_strength'] = signal_strength
 
     # 2. T+1 执行

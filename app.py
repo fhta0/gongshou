@@ -161,14 +161,19 @@ def render_realtime_card(merged_data: pd.DataFrame):
     ratio_pct_series = calculate_ratio_percentile(merged_data['ratio'], pct_window)
     ratio_pct_today = ratio_pct_series.iloc[-1] if not pd.isna(ratio_pct_series.iloc[-1]) else None
 
-    # 信号强度
+    # 信号强度（spec: 低位买cy=强信号, 高位买hl=强信号, 高位买cy需动量百分位验证）
     if ratio_pct_today is not None:
         low_pct = STRATEGY_CONFIG['low_percentile']
         high_pct = STRATEGY_CONFIG['high_percentile']
-        if new_state != 'cash' and ratio_pct_today <= low_pct:
-            signal_strength = "🔥 强信号（低位区）"
-        elif new_state == 'cy' and ratio_pct_today >= high_pct and cy_mom_pct_today and cy_mom_pct_today > 0.7:
-            signal_strength = "🔥 强信号（高位验证）"
+        high_cy_mom_threshold = STRATEGY_CONFIG['high_cy_mom_pct_threshold']
+        if new_state == 'cy' and ratio_pct_today <= low_pct:
+            signal_strength = "🔥 强信号（低位买创业板）"
+        elif new_state == 'hl' and ratio_pct_today >= high_pct:
+            signal_strength = "🔥 强信号（高位买红利）"
+        elif (new_state == 'cy' and ratio_pct_today >= high_pct
+              and cy_mom_pct_today is not None
+              and cy_mom_pct_today > high_cy_mom_threshold):
+            signal_strength = "🔥 强信号（高位动量验证）"
         elif new_state != 'cash':
             signal_strength = "📊 普通信号"
         else:
@@ -268,15 +273,38 @@ def render_ratio_chart(merged_data: pd.DataFrame):
         line=dict(color='gray', width=1, dash='dash')
     ), row=1, col=1)
 
-    # 百分位区域着色（上图背景）
+    # 百分位区域着色（上图背景，按时间轴分段）
     low_pct = STRATEGY_CONFIG['low_percentile']
     high_pct = STRATEGY_CONFIG['high_percentile']
-    fig.add_hrect(y0=ratio.min() * 0.99, y1=ratio.max() * 1.01,
-                  fillcolor='red', opacity=0.05, layer="below", line_width=0,
-                  row=1, col=1)
-    fig.add_hrect(y0=ratio.min() * 0.99, y1=ratio.max() * 1.01,
-                  fillcolor='green', opacity=0.05, layer="below", line_width=0,
-                  row=1, col=1)
+    zone_colors = {'low': 'rgba(0,128,0,0.08)', 'mid': 'rgba(128,128,128,0.05)',
+                   'high': 'rgba(255,0,0,0.08)'}
+
+    dates_arr = merged_data['date'].values
+    pct_arr = ratio_pct.values
+
+    # 找连续同 zone 的段
+    prev_zone = None
+    zone_start_idx = None
+    for i in range(len(pct_arr)):
+        if pd.isna(pct_arr[i]):
+            if prev_zone is not None:
+                fig.add_vrect(x0=dates_arr[zone_start_idx], x1=dates_arr[i - 1],
+                              fillcolor=zone_colors[prev_zone], line_width=0,
+                              layer="below", row=1, col=1)
+                prev_zone = None
+            continue
+        zone = 'low' if pct_arr[i] <= low_pct else ('high' if pct_arr[i] >= high_pct else 'mid')
+        if zone != prev_zone:
+            if prev_zone is not None:
+                fig.add_vrect(x0=dates_arr[zone_start_idx], x1=dates_arr[i - 1],
+                              fillcolor=zone_colors[prev_zone], line_width=0,
+                              layer="below", row=1, col=1)
+            zone_start_idx = i
+            prev_zone = zone
+    if prev_zone is not None:
+        fig.add_vrect(x0=dates_arr[zone_start_idx], x1=dates_arr[-1],
+                      fillcolor=zone_colors[prev_zone], line_width=0,
+                      layer="below", row=1, col=1)
 
     # 中图：动量对比
     cy_mom = calculate_momentum(merged_data['close_cy'], window)
