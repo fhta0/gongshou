@@ -16,5 +16,17 @@ STRATEGY_CONFIG = {
     },
     "momentum_window": 20,           # 动量回看窗口（交易日）
     "risk_free_rate": 0.015,         # 年化无风险利率 1.5%
-    "cooldown_days": 5               # 信号冷却期（防频繁切换）
+    "cooldown_days": 5,              # 信号冷却期（防频繁切换）
+
+    # 组合策略参数（比值位置 + 动量百分位）
+    "percentile_window": 750,            # 比值百分位滚动窗口（3年交易日）
+    "momentum_percentile_window": 250,   # 动量百分位滚动窗口（1年）
+    "low_percentile": 0.20,              # 低位阈值（比值≤20%分位）
+    "high_percentile": 0.80,             # 高位阈值（比值≥80%分位）
+    # 动量百分位门槛（按比值区域）
+    "low_cy_mom_pct_threshold": 0.30,    # 低位时创业板动量百分位门槛
+    "mid_mom_pct_threshold": 0.50,       # 中间时动量百分位门槛
+    "high_cy_mom_pct_threshold": 0.70,   # 高位时创业板动量百分位门槛
+    "low_hl_mom_pct_threshold": 0.50,    # 低位时红利动量百分位门槛
+    "high_hl_mom_pct_threshold": 0.30,   # 高位时红利动量百分位门槛
 }

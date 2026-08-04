@@ -21,6 +21,32 @@ def calculate_momentum(close_series: pd.Series, window: int = 20) -> pd.Series:
     return close_series.pct_change(window)
 
 
+def calculate_ratio_percentile(ratio_series: pd.Series, window: int = 750) -> pd.Series:
+    """
+    计算比值的滚动百分位（历史位置）
+    Args:
+        ratio_series: 比值序列
+        window: 滚动窗口（交易日）
+    Returns:
+        百分位序列（0~1）
+    """
+    rolling_rank = ratio_series.rolling(window=window).rank()
+    return rolling_rank / window
+
+
+def calculate_momentum_percentile(momentum_series: pd.Series, window: int = 250) -> pd.Series:
+    """
+    计算动量的滚动百分位（自适应门槛）
+    Args:
+        momentum_series: 动量序列
+        window: 滚动窗口（交易日）
+    Returns:
+        百分位序列（0~1）
+    """
+    rolling_rank = momentum_series.rolling(window=window).rank()
+    return rolling_rank / window
+
+
 def compare_momentum(cy_mom: float, hl_mom: float) -> str:
     """
     比较两指数动量，返回领先方
@@ -117,6 +143,83 @@ def generate_signals(
 
     # 数据不足时设为 NaN
     raw_signals[cy_mom.isna()] = np.nan
+
+    # 应用冷却期
+    if apply_cooldown:
+        return _apply_cooldown(raw_signals)
+
+    return raw_signals
+
+
+def generate_combined_signals(
+    df: pd.DataFrame,
+    window: int = None,
+    apply_cooldown: bool = True
+) -> pd.Series:
+    """
+    组合策略：比值位置 + 双动量（使用动量百分位作为自适应门槛）
+    包含绝对动量下限（动量 > 0）作为安全网
+
+    Args:
+        df: 包含 close_cy, close_hl, ratio 的 DataFrame
+        window: 动量窗口
+        apply_cooldown: 是否应用冷却期（默认 True）
+    Returns:
+        信号序列：1=创业板, -1=红利, 0=空仓
+    """
+    if window is None:
+        window = STRATEGY_CONFIG['momentum_window']
+
+    # 计算动量
+    cy_mom = calculate_momentum(df['close_cy'], window)
+    hl_mom = calculate_momentum(df['close_hl'], window)
+
+    # 计算比值百分位
+    pct_window = STRATEGY_CONFIG['percentile_window']
+    ratio_pct = calculate_ratio_percentile(df['ratio'], pct_window)
+
+    # 计算动量百分位（自适应门槛）
+    mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
+    cy_mom_pct = calculate_momentum_percentile(cy_mom, mom_pct_window)
+    hl_mom_pct = calculate_momentum_percentile(hl_mom, mom_pct_window)
+
+    # 阈值参数
+    low_pct = STRATEGY_CONFIG['low_percentile']
+    high_pct = STRATEGY_CONFIG['high_percentile']
+    low_cy_threshold = STRATEGY_CONFIG['low_cy_mom_pct_threshold']
+    mid_threshold = STRATEGY_CONFIG['mid_mom_pct_threshold']
+    high_cy_threshold = STRATEGY_CONFIG['high_cy_mom_pct_threshold']
+    low_hl_threshold = STRATEGY_CONFIG['low_hl_mom_pct_threshold']
+    high_hl_threshold = STRATEGY_CONFIG['high_hl_mom_pct_threshold']
+
+    # 向量化条件（包含绝对动量下限 > 0）
+    cy_stronger = cy_mom > hl_mom  # 平局归红利
+    hl_stronger = ~cy_stronger
+    cy_positive = cy_mom > 0  # 绝对动量下限
+    hl_positive = hl_mom > 0
+
+    # 低位区域
+    low_mask = ratio_pct <= low_pct
+    low_cy_buy = low_mask & cy_stronger & cy_positive & (cy_mom_pct > low_cy_threshold)
+    low_hl_buy = low_mask & hl_stronger & hl_positive & (hl_mom_pct > low_hl_threshold)
+
+    # 中间区域
+    mid_mask = (ratio_pct > low_pct) & (ratio_pct < high_pct)
+    mid_cy_buy = mid_mask & cy_stronger & cy_positive & (cy_mom_pct > mid_threshold)
+    mid_hl_buy = mid_mask & hl_stronger & hl_positive & (hl_mom_pct > mid_threshold)
+
+    # 高位区域
+    high_mask = ratio_pct >= high_pct
+    high_cy_buy = high_mask & cy_stronger & cy_positive & (cy_mom_pct > high_cy_threshold)
+    high_hl_buy = high_mask & hl_stronger & hl_positive & (hl_mom_pct > high_hl_threshold)
+
+    # 合并信号
+    raw_signals = pd.Series(0, index=df.index, dtype=float)
+    raw_signals[low_cy_buy | mid_cy_buy | high_cy_buy] = 1.0
+    raw_signals[low_hl_buy | mid_hl_buy | high_hl_buy] = -1.0
+
+    # 数据不足时设为 NaN
+    raw_signals[cy_mom.isna() | ratio_pct.isna() | cy_mom_pct.isna()] = np.nan
 
     # 应用冷却期
     if apply_cooldown:

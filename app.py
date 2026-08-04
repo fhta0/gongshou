@@ -91,14 +91,26 @@ def render_realtime_card(merged_data: pd.DataFrame):
     rf_period = STRATEGY_CONFIG['risk_free_rate'] * window / 252
 
     prev_state = st.session_state.get('prev_state', 'cash')
-    days_since_switch = st.session_state.get('days_since_last_switch', 999)
+    last_switch_date = st.session_state.get('last_switch_date', None)
+
+    # 计算距离上次切换的交易日数（使用merged_data的日期序列）
+    if last_switch_date is not None:
+        dates = merged_data['date']
+        last_switch_idx = dates[dates == last_switch_date].index
+        if len(last_switch_idx) > 0:
+            current_idx = len(dates) - 1  # 最后一个交易日的索引
+            days_since_switch = current_idx - last_switch_idx[0]
+        else:
+            days_since_switch = 999
+    else:
+        days_since_switch = 999
+
     display, new_state, event = calculate_signal(cy_mom_today, hl_mom_today, prev_state, days_since_switch)
 
-    # 更新状态和冷却计时
+    # 更新状态和冷却计时（记录切换日期）
     if new_state != prev_state:
-        st.session_state['days_since_last_switch'] = 0
-    else:
-        st.session_state['days_since_last_switch'] = days_since_switch + 1
+        # 使用历史数据的最后一个日期作为当前日期
+        st.session_state['last_switch_date'] = merged_data['date'].iloc[-1]
     st.session_state['prev_state'] = new_state
 
     # 指标卡片
@@ -213,12 +225,19 @@ def render_index_comparison(merged_data: pd.DataFrame):
 def render_backtest_tab(merged_data: pd.DataFrame):
     st.subheader("历史回测")
     with st.form("backtest_form"):
+        strategy_choice = st.selectbox(
+            "选择策略",
+            ["纯动量策略", "组合策略（比值位置+动量百分位）"],
+            index=0
+        )
         st.markdown("点击按钮开始回测（可能需要几秒钟）")
         submitted = st.form_submit_button("🚀 开始回测")
 
     if submitted:
-        with st.spinner("正在计算回测..."):
-            backtest_result = run_backtest(merged_data)
+        strategy_type = 'combined' if '组合' in strategy_choice else 'momentum'
+
+        with st.spinner(f"正在计算回测（{strategy_choice}）..."):
+            backtest_result = run_backtest(merged_data, strategy_type=strategy_type)
             stats = calculate_statistics(backtest_result)
 
         col1, col2, col3, col4, col5 = st.columns(5)

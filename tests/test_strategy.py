@@ -185,3 +185,68 @@ def test_realtime_cooldown_blocks_switch():
     # 冷却期外：允许切换
     _, state3, _ = calculate_signal(0.02, 0.05, 'cy', days_since_last_switch=10)
     assert state3 == 'hl'  # 切换为 hl
+
+
+# ===== calculate_ratio_percentile 测试 =====
+
+def test_ratio_percentile_basic():
+    """百分位计算正确性"""
+    from strategy import calculate_ratio_percentile
+    # 递增序列：最后一个值应在最高位
+    ratio = pd.Series([0.3, 0.4, 0.5, 0.6, 0.7])
+    result = calculate_ratio_percentile(ratio, window=5)
+    assert result.iloc[-1] > 0.8
+
+def test_ratio_percentile_low_at_bottom():
+    """序列底部值百分位低"""
+    from strategy import calculate_ratio_percentile
+    # 突然跌到最低
+    ratio = pd.Series([0.5, 0.5, 0.5, 0.5, 0.2])
+    result = calculate_ratio_percentile(ratio, window=5)
+    assert result.iloc[-1] < 0.3
+
+def test_ratio_percentile_nan_for_insufficient():
+    """数据不足窗口时返回 NaN"""
+    from strategy import calculate_ratio_percentile
+    ratio = pd.Series([0.5, 0.6, 0.7])
+    result = calculate_ratio_percentile(ratio, window=5)
+    assert result.isna().all()
+
+
+# ===== calculate_momentum_percentile 测试 =====
+
+def test_momentum_percentile_basic():
+    """动量百分位计算正确性"""
+    from strategy import calculate_momentum_percentile
+    # 递增序列：最后一个值应在最高位
+    momentum = pd.Series([0.01, 0.02, 0.03, 0.04, 0.05])
+    result = calculate_momentum_percentile(momentum, window=5)
+    assert result.iloc[-1] > 0.8
+
+def test_momentum_percentile_low_at_bottom():
+    """动量处于低位时百分位低"""
+    from strategy import calculate_momentum_percentile
+    momentum = pd.Series([0.05, 0.04, 0.03, 0.02, 0.01])
+    result = calculate_momentum_percentile(momentum, window=5)
+    assert result.iloc[-1] < 0.3
+
+
+# ===== generate_combined_signals 测试 =====
+
+def test_combined_absolute_momentum_floor():
+    """组合策略：动量<0时不买入（安全网）"""
+    from strategy import generate_combined_signals
+    # 构造数据：确保两个动量都为负（价格持续下跌）
+    # 需要足够长的数据以通过动量百分位窗口（250天）
+    n = 300
+    cy = [100.0 - i * 0.2 for i in range(n)]  # 持续下跌
+    hl = [100.0 - i * 0.1 for i in range(n)]  # 持续下跌
+    ratio = [c / h for c, h in zip(cy, hl)]
+    df = pd.DataFrame({
+        'close_cy': cy,
+        'close_hl': hl,
+        'ratio': ratio,
+    })
+    signals = generate_combined_signals(df, window=5)
+    # 两个动量都为负，不应买入（信号应该是0，不是1或-1）
+    assert signals.iloc[-1] == 0 or pd.isna(signals.iloc[-1])

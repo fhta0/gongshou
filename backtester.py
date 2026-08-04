@@ -5,21 +5,23 @@ T 日数据生成信号，T+1 日执行交易（避免 look-ahead bias）
 import pandas as pd
 import streamlit as st
 from config import STRATEGY_CONFIG
-from strategy import generate_signals
+from strategy import generate_signals, generate_combined_signals, calculate_ratio_percentile, calculate_momentum_percentile
 
 
 @st.cache_data
 def run_backtest(
     df: pd.DataFrame,
     window: int = None,
-    transaction_cost: float = 0.001  # 单边 0.1%（含佣金+印花税+滑点）
+    transaction_cost: float = 0.001,  # 单边 0.1%（含佣金+印花税+滑点）
+    strategy_type: str = 'momentum'  # 'momentum' 或 'combined'
 ) -> pd.DataFrame:
     """
     运行回测
     Args:
-        df: 包含 date, close_cy, close_hl 的 DataFrame
+        df: 包含 date, close_cy, close_hl 的 DataFrame（组合策略还需 ratio 列）
         window: 动量窗口（默认使用配置值）
         transaction_cost: 单边交易成本，默认 0.1%
+        strategy_type: 'momentum'（纯动量）或 'combined'（组合策略）
     Returns:
         包含信号、持仓、净值的 DataFrame
     """
@@ -29,7 +31,13 @@ def run_backtest(
     result = df.copy()
 
     # 1. 生成信号（T日）
-    result['signal'] = generate_signals(result, window)
+    if strategy_type == 'combined':
+        result['signal'] = generate_combined_signals(result, window)
+        result['ratio_percentile'] = calculate_ratio_percentile(
+            result['ratio'], STRATEGY_CONFIG['percentile_window']
+        )
+    else:
+        result['signal'] = generate_signals(result, window)
 
     # 2. T+1 执行
     result['position'] = result['signal'].shift(1)
