@@ -30,14 +30,40 @@ def run_backtest(
 
     result = df.copy()
 
+    # 确保 ratio 列存在
+    if 'ratio' not in result.columns:
+        result['ratio'] = result['close_cy'] / result['close_hl']
+
+    # 计算百分位（供信号强度和 UI 使用）
+    result['ratio_percentile'] = calculate_ratio_percentile(
+        result['ratio'], STRATEGY_CONFIG['percentile_window']
+    )
+    mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
+    cy_mom_pct = calculate_momentum_percentile(
+        result['close_cy'].pct_change(window), mom_pct_window
+    )
+    hl_mom_pct = calculate_momentum_percentile(
+        result['close_hl'].pct_change(window), mom_pct_window
+    )
+
     # 1. 生成信号（T日）
     if strategy_type == 'combined':
         result['signal'] = generate_combined_signals(result, window)
-        result['ratio_percentile'] = calculate_ratio_percentile(
-            result['ratio'], STRATEGY_CONFIG['percentile_window']
-        )
     else:
         result['signal'] = generate_signals(result, window)
+
+    # 1b. 信号强度 + 动量百分位列
+    result['cy_momentum_percentile'] = cy_mom_pct
+    result['hl_momentum_percentile'] = hl_mom_pct
+
+    signal_strength = pd.Series('空仓', index=result.index)
+    signal_strength[result['signal'] == 1] = '普通'
+    signal_strength[result['signal'] == -1] = '普通'
+    low_mask = result['ratio_percentile'] <= STRATEGY_CONFIG['low_percentile']
+    high_mask = result['ratio_percentile'] >= STRATEGY_CONFIG['high_percentile']
+    signal_strength[low_mask & (result['signal'] != 0)] = '强信号'
+    signal_strength[high_mask & (result['signal'] == 1) & (cy_mom_pct > 0.7)] = '强信号'
+    result['signal_strength'] = signal_strength
 
     # 2. T+1 执行
     result['position'] = result['signal'].shift(1)

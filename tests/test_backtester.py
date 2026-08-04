@@ -177,7 +177,10 @@ def test_backtest_default_is_momentum():
         'date': dates,
         'close_cy': cy,
         'close_hl': hl,
+        'ratio': cy / hl,
     })
     result = run_backtest(df, window=20)
-    # 默认不应有 ratio_percentile 列
-    assert 'ratio_percentile' not in result.columns
+    # 纯动量策略不应有 signal_strength='强信号'（因为没有用比值百分位生成信号）
+    # 但 ratio_percentile 列始终存在（用于信号强度标签）
+    assert 'ratio_percentile' in result.columns
+    assert 'signal_strength' in result.columns

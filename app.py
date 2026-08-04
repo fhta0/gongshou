@@ -2,14 +2,20 @@
 创业板/中证红利双动量信号系统 - Streamlit 主入口
 策略：比较两指数的N天动量，选择更强的一方；若均为负则空仓。
 """
+import json
+import os
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
 from config import STRATEGY_CONFIG
 from data_loader import load_merged_data, get_realtime_change
-from strategy import calculate_signal, calculate_momentum
+from strategy import (
+    calculate_signal, calculate_momentum,
+    calculate_ratio_percentile, calculate_momentum_percentile
+)
 from backtester import run_backtest, calculate_statistics
 
 
@@ -18,6 +24,31 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
+
+
+# ===== 冷却状态持久化 =====
+
+def _load_cooldown_state():
+    """从本地文件加载上次切换日期"""
+    try:
+        path = os.path.join(os.path.dirname(__file__), '.last_switch.json')
+        if os.path.exists(path):
+            with open(path, 'r') as f:
+                data = json.load(f)
+            return pd.Timestamp(data.get('last_switch_date', ''))
+    except Exception:
+        pass
+    return None
+
+
+def _save_cooldown_state(date):
+    """保存上次切换日期到本地文件"""
+    try:
+        path = os.path.join(os.path.dirname(__file__), '.last_switch.json')
+        with open(path, 'w') as f:
+            json.dump({'last_switch_date': str(date)}, f)
+    except Exception:
+        pass
 
 
 def is_trading_hours() -> bool:
@@ -90,15 +121,20 @@ def render_realtime_card(merged_data: pd.DataFrame):
 
     rf_period = STRATEGY_CONFIG['risk_free_rate'] * window / 252
 
+    # 冷却期：从文件加载初始值（防止刷新丢失）
     prev_state = st.session_state.get('prev_state', 'cash')
     last_switch_date = st.session_state.get('last_switch_date', None)
+    if last_switch_date is None:
+        last_switch_date = _load_cooldown_state()
+        if last_switch_date is not None:
+            st.session_state['last_switch_date'] = last_switch_date
 
     # 计算距离上次切换的交易日数（使用merged_data的日期序列）
     if last_switch_date is not None:
         dates = merged_data['date']
         last_switch_idx = dates[dates == last_switch_date].index
         if len(last_switch_idx) > 0:
-            current_idx = len(dates) - 1  # 最后一个交易日的索引
+            current_idx = len(dates) - 1
             days_since_switch = current_idx - last_switch_idx[0]
         else:
             days_since_switch = 999
@@ -107,11 +143,38 @@ def render_realtime_card(merged_data: pd.DataFrame):
 
     display, new_state, event = calculate_signal(cy_mom_today, hl_mom_today, prev_state, days_since_switch)
 
-    # 更新状态和冷却计时（记录切换日期）
+    # 更新状态和冷却计时
     if new_state != prev_state:
-        # 使用历史数据的最后一个日期作为当前日期
-        st.session_state['last_switch_date'] = merged_data['date'].iloc[-1]
+        switch_date = merged_data['date'].iloc[-1]
+        st.session_state['last_switch_date'] = switch_date
+        _save_cooldown_state(switch_date)
     st.session_state['prev_state'] = new_state
+
+    # 计算百分位（用于展示）
+    mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
+    cy_mom_pct_series = calculate_momentum_percentile(cy_mom_series, mom_pct_window)
+    hl_mom_pct_series = calculate_momentum_percentile(hl_mom_series, mom_pct_window)
+    cy_mom_pct_today = cy_mom_pct_series.iloc[-1] if not pd.isna(cy_mom_pct_series.iloc[-1]) else None
+    hl_mom_pct_today = hl_mom_pct_series.iloc[-1] if not pd.isna(hl_mom_pct_series.iloc[-1]) else None
+
+    pct_window = STRATEGY_CONFIG['percentile_window']
+    ratio_pct_series = calculate_ratio_percentile(merged_data['ratio'], pct_window)
+    ratio_pct_today = ratio_pct_series.iloc[-1] if not pd.isna(ratio_pct_series.iloc[-1]) else None
+
+    # 信号强度
+    if ratio_pct_today is not None:
+        low_pct = STRATEGY_CONFIG['low_percentile']
+        high_pct = STRATEGY_CONFIG['high_percentile']
+        if new_state != 'cash' and ratio_pct_today <= low_pct:
+            signal_strength = "🔥 强信号（低位区）"
+        elif new_state == 'cy' and ratio_pct_today >= high_pct and cy_mom_pct_today and cy_mom_pct_today > 0.7:
+            signal_strength = "🔥 强信号（高位验证）"
+        elif new_state != 'cash':
+            signal_strength = "📊 普通信号"
+        else:
+            signal_strength = "⚪ 空仓"
+    else:
+        signal_strength = "数据不足"
 
     # 指标卡片
     col1, col2, col3 = st.columns(3)
@@ -129,6 +192,31 @@ def render_realtime_card(merged_data: pd.DataFrame):
         )
     with col3:
         st.metric("状态", f"{display['emoji']} {display['signal']}")
+
+    # 百分位指标
+    st.caption("📈 历史百分位（越高=越强/越贵）")
+    pct1, pct2, pct3 = st.columns(3)
+    with pct1:
+        st.metric(
+            "创业板动量百分位",
+            f"{cy_mom_pct_today:.0%}" if cy_mom_pct_today is not None else "N/A",
+            help=f"创业板动量在过去 {mom_pct_window} 天中的位置"
+        )
+    with pct2:
+        st.metric(
+            "红利动量百分位",
+            f"{hl_mom_pct_today:.0%}" if hl_mom_pct_today is not None else "N/A",
+            help=f"红利动量在过去 {mom_pct_window} 天中的位置"
+        )
+    with pct3:
+        st.metric(
+            "比值百分位",
+            f"{ratio_pct_today:.0%}" if ratio_pct_today is not None else "N/A",
+            help=f"创业板/红利比值在过去 {pct_window} 天中的位置"
+        )
+
+    # 信号强度
+    st.caption(f"信号强度：{signal_strength}")
 
     # 信号描述
     if display['color'] == 'blue':
@@ -160,9 +248,13 @@ def render_ratio_chart(merged_data: pd.DataFrame):
     ratio = merged_data['ratio']
     ratio_ma = ratio.rolling(window).mean()
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+    # 计算百分位
+    pct_window = STRATEGY_CONFIG['percentile_window']
+    ratio_pct = calculate_ratio_percentile(ratio, pct_window)
+
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
                         vertical_spacing=0.03,
-                        row_heights=[0.6, 0.4])
+                        row_heights=[0.45, 0.30, 0.25])
 
     # 上图：比值 + MA
     fig.add_trace(go.Scattergl(
@@ -176,7 +268,17 @@ def render_ratio_chart(merged_data: pd.DataFrame):
         line=dict(color='gray', width=1, dash='dash')
     ), row=1, col=1)
 
-    # 下图：动量对比
+    # 百分位区域着色（上图背景）
+    low_pct = STRATEGY_CONFIG['low_percentile']
+    high_pct = STRATEGY_CONFIG['high_percentile']
+    fig.add_hrect(y0=ratio.min() * 0.99, y1=ratio.max() * 1.01,
+                  fillcolor='red', opacity=0.05, layer="below", line_width=0,
+                  row=1, col=1)
+    fig.add_hrect(y0=ratio.min() * 0.99, y1=ratio.max() * 1.01,
+                  fillcolor='green', opacity=0.05, layer="below", line_width=0,
+                  row=1, col=1)
+
+    # 中图：动量对比
     cy_mom = calculate_momentum(merged_data['close_cy'], window)
     hl_mom = calculate_momentum(merged_data['close_hl'], window)
 
@@ -192,10 +294,38 @@ def render_ratio_chart(merged_data: pd.DataFrame):
     ), row=2, col=1)
     fig.add_hline(y=0, line_dash='solid', line_color='black', line_width=0.5, row=2, col=1)
 
-    fig.update_xaxes(title_text="日期", row=2, col=1)
+    # 下图：百分位走势
+    mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
+    cy_mom_pct = calculate_momentum_percentile(cy_mom, mom_pct_window)
+    hl_mom_pct = calculate_momentum_percentile(hl_mom, mom_pct_window)
+
+    fig.add_trace(go.Scattergl(
+        x=merged_data['date'], y=ratio_pct,
+        mode='lines', name='比值百分位',
+        line=dict(color='purple', width=1.5)
+    ), row=3, col=1)
+    fig.add_trace(go.Scattergl(
+        x=merged_data['date'], y=cy_mom_pct,
+        mode='lines', name='创业板动量百分位',
+        line=dict(color='blue', width=1, dash='dot')
+    ), row=3, col=1)
+    fig.add_trace(go.Scattergl(
+        x=merged_data['date'], y=hl_mom_pct,
+        mode='lines', name='红利动量百分位',
+        line=dict(color='orange', width=1, dash='dot')
+    ), row=3, col=1)
+
+    # 百分位阈值线
+    fig.add_hline(y=low_pct, line_dash='dash', line_color='green', line_width=0.8, row=3, col=1)
+    fig.add_hline(y=high_pct, line_dash='dash', line_color='red', line_width=0.8, row=3, col=1)
+    fig.add_hline(y=0.5, line_dash='dot', line_color='gray', line_width=0.5, row=3, col=1)
+
+    fig.update_xaxes(title_text="日期", row=3, col=1)
     fig.update_yaxes(title_text="比值", row=1, col=1)
-    fig.update_yaxes(title_text="动量 (N天涨跌幅)", row=2, col=1)
-    fig.update_layout(height=500, hovermode='x unified', legend=dict(orientation='h', y=1.05))
+    fig.update_yaxes(title_text="动量", row=2, col=1)
+    fig.update_yaxes(title_text="百分位", range=[0, 1], row=3, col=1)
+    fig.update_layout(height=700, hovermode='x unified',
+                      legend=dict(orientation='h', y=1.05))
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -230,6 +360,7 @@ def render_backtest_tab(merged_data: pd.DataFrame):
             ["纯动量策略", "组合策略（比值位置+动量百分位）"],
             index=0
         )
+        compare = st.checkbox("对比两种策略", value=False)
         st.markdown("点击按钮开始回测（可能需要几秒钟）")
         submitted = st.form_submit_button("🚀 开始回测")
 
@@ -240,51 +371,81 @@ def render_backtest_tab(merged_data: pd.DataFrame):
             backtest_result = run_backtest(merged_data, strategy_type=strategy_type)
             stats = calculate_statistics(backtest_result)
 
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            st.metric("毛收益率", f"{stats['gross_return']:.2%}")
-        with col2:
-            st.metric("净收益率", f"{stats['net_return']:.2%}",
-                      help="扣除单边0.1%交易成本后的收益")
-        with col3:
-            st.metric("年化净收益", f"{stats['annualized_return']:.2%}")
-        with col4:
-            st.metric("最大回撤", f"{stats['max_drawdown']:.2%}")
-        with col5:
-            st.metric("夏普比率", f"{stats['sharpe_ratio']:.2f}")
+        compare_result = None
+        compare_stats = None
+        if compare:
+            other_type = 'momentum' if strategy_type == 'combined' else 'combined'
+            compare_result = run_backtest(merged_data, strategy_type=other_type)
+            compare_stats = calculate_statistics(compare_result)
 
-        col6, col7, col8, col9 = st.columns(4)
-        with col6:
-            st.metric("日胜率", f"{stats['win_rate']:.2%}")
-        with col7:
-            st.metric("交易胜率", f"{stats['trade_win_rate']:.2%}",
-                      help="按持仓期统计，每次开平仓算一次交易")
-        with col8:
-            st.metric("切换次数", f"{stats['trade_count']}次",
-                      help="仓位切换次数（含首次建仓）")
-        with col9:
-            avg_cost = stats['trade_count'] * 0.001
-            st.metric("累计成本", f"{avg_cost:.2%}",
-                      help="交易成本估算（单边0.1%×切换次数）")
+        if compare and compare_result is not None:
+            # 对比模式
+            other_name = '纯动量' if strategy_type == 'combined' else '组合策略'
+            col_l, col_r = st.columns(2)
+            with col_l:
+                st.markdown(f"**📊 {strategy_choice}**")
+                _render_backtest_metrics(stats)
+            with col_r:
+                st.markdown(f"**📊 {other_name}**")
+                _render_backtest_metrics(compare_stats)
+            st.subheader("策略累计收益曲线对比")
+            render_comparison_nav_chart(backtest_result, compare_result,
+                                        strategy_choice, other_name)
+        else:
+            # 单策略模式
+            _render_backtest_metrics(stats)
+            _render_position_distribution(backtest_result)
+            st.subheader("策略累计收益曲线")
+            render_nav_chart(backtest_result)
 
-        # 持仓分布
-        pos = backtest_result['position'].dropna()
-        total = len(pos)
-        col_c1, col_c2, col_c3 = st.columns(3)
-        with col_c1:
-            cy_days = (pos == 1).sum()
-            st.metric("持有创业板", f"{cy_days}天 ({cy_days/total:.1%})")
-        with col_c2:
-            hl_days = (pos == -1).sum()
-            st.metric("持有红利", f"{hl_days}天 ({hl_days/total:.1%})")
-        with col_c3:
-            cash_days = (pos == 0).sum()
-            st.metric("空仓", f"{cash_days}天 ({cash_days/total:.1%})")
-
-        st.subheader("策略累计收益曲线")
-        render_nav_chart(backtest_result)
         st.subheader("信号切换记录")
         render_signal_table(backtest_result)
+
+
+def _render_backtest_metrics(stats: dict):
+    """渲染回测统计指标"""
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.metric("毛收益率", f"{stats['gross_return']:.2%}")
+    with col2:
+        st.metric("净收益率", f"{stats['net_return']:.2%}",
+                  help="扣除单边0.1%交易成本后的收益")
+    with col3:
+        st.metric("年化净收益", f"{stats['annualized_return']:.2%}")
+    with col4:
+        st.metric("最大回撤", f"{stats['max_drawdown']:.2%}")
+    with col5:
+        st.metric("夏普比率", f"{stats['sharpe_ratio']:.2f}")
+
+    col6, col7, col8, col9 = st.columns(4)
+    with col6:
+        st.metric("日胜率", f"{stats['win_rate']:.2%}")
+    with col7:
+        st.metric("交易胜率", f"{stats['trade_win_rate']:.2%}",
+                  help="按持仓期统计，每次开平仓算一次交易")
+    with col8:
+        st.metric("切换次数", f"{stats['trade_count']}次",
+                  help="仓位切换次数（含首次建仓）")
+    with col9:
+        avg_cost = stats['trade_count'] * 0.001
+        st.metric("累计成本", f"{avg_cost:.2%}",
+                  help="交易成本估算（单边0.1%×切换次数）")
+
+
+def _render_position_distribution(backtest_result: pd.DataFrame):
+    """渲染持仓分布"""
+    pos = backtest_result['position'].dropna()
+    total = len(pos)
+    col_c1, col_c2, col_c3 = st.columns(3)
+    with col_c1:
+        cy_days = (pos == 1).sum()
+        st.metric("持有创业板", f"{cy_days}天 ({cy_days/total:.1%})")
+    with col_c2:
+        hl_days = (pos == -1).sum()
+        st.metric("持有红利", f"{hl_days}天 ({hl_days/total:.1%})")
+    with col_c3:
+        cash_days = (pos == 0).sum()
+        st.metric("空仓", f"{cash_days}天 ({cash_days/total:.1%})")
 
 
 def render_nav_chart(backtest_result: pd.DataFrame):
@@ -310,9 +471,37 @@ def render_nav_chart(backtest_result: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_comparison_nav_chart(result_a: pd.DataFrame, result_b: pd.DataFrame,
+                                name_a: str, name_b: str):
+    """对比模式下叠加显示两条策略净值曲线"""
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(
+        x=result_a['date'], y=result_a['strategy_nav'],
+        mode='lines', name=name_a, line=dict(color='purple', width=2)
+    ))
+    fig.add_trace(go.Scattergl(
+        x=result_b['date'], y=result_b['strategy_nav'],
+        mode='lines', name=name_b, line=dict(color='teal', width=2)
+    ))
+    fig.add_trace(go.Scattergl(
+        x=result_a['date'], y=result_a['cy_nav'],
+        mode='lines', name='创业板基准', line=dict(color='blue', dash='dash', width=1)
+    ))
+    fig.add_trace(go.Scattergl(
+        x=result_a['date'], y=result_a['hl_nav'],
+        mode='lines', name='红利基准', line=dict(color='orange', dash='dash', width=1)
+    ))
+    fig.update_layout(
+        xaxis_title="日期", yaxis_title="净值",
+        hovermode='x unified', height=450
+    )
+    fig.update_traces(connectgaps=True)
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def render_signal_table(backtest_result: pd.DataFrame):
     """显示信号切换记录"""
-    # 找到持仓发生变化的日期
     pos = backtest_result['position'].fillna(0)
     changes = pos.diff().fillna(pos)
     switch_mask = changes != 0
@@ -322,7 +511,11 @@ def render_signal_table(backtest_result: pd.DataFrame):
         st.info("回测期间无信号切换")
         return
 
-    display_df = signals[['date', 'position', 'ratio', 'cy_momentum', 'hl_momentum']].copy()
+    cols = ['date', 'position', 'ratio', 'cy_momentum', 'hl_momentum']
+    if 'signal_strength' in signals.columns:
+        cols.append('signal_strength')
+    display_df = signals[cols].copy()
+
     display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
     display_df['ratio'] = display_df['ratio'].apply(lambda x: f"{x:.4f}")
     display_df['cy_momentum'] = display_df['cy_momentum'].apply(lambda x: f"{x:+.2%}" if pd.notna(x) else '-')
@@ -330,7 +523,14 @@ def render_signal_table(backtest_result: pd.DataFrame):
     display_df['position'] = display_df['position'].map({
         1.0: '🔵 创业板', -1.0: '🟠 红利', 0.0: '⚪ 空仓'
     })
-    display_df.columns = ['日期', '切换至', '比值', '创业板动量', '红利动量']
+    if 'signal_strength' in display_df.columns:
+        display_df['signal_strength'] = display_df['signal_strength'].map({
+            '强信号': '🔥 强信号', '普通': '📊 普通', '空仓': '⚪ 空仓'
+        })
+        col_names = ['日期', '切换至', '比值', '创业板动量', '红利动量', '信号强度']
+    else:
+        col_names = ['日期', '切换至', '比值', '创业板动量', '红利动量']
+    display_df.columns = col_names
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 
