@@ -37,11 +37,13 @@ def run_backtest(
     # 3. 检测仓位切换（用于计算交易成本）
     position_change = result['position'].fillna(0).diff().fillna(0)
     result['is_switch'] = (position_change != 0).astype(int)
-    # 第一次建仓也算一次切换
+    # 第一次建仓也算一次切换（但进入空仓不收费）
     if result['position'].notna().any():
         first_valid_idx = result['position'].first_valid_index()
-        if first_valid_idx is not None:
+        if first_valid_idx is not None and result.loc[first_valid_idx, 'position'] != 0:
             result.loc[first_valid_idx, 'is_switch'] = 1
+        else:
+            result.loc[first_valid_idx, 'is_switch'] = 0
 
     # 4. 计算每日收益
     result['cy_return'] = result['close_cy'].pct_change()
@@ -143,7 +145,7 @@ def calculate_statistics(df: pd.DataFrame) -> dict:
 def _calculate_trade_win_rate(df: pd.DataFrame) -> float:
     """
     按持仓期统计交易胜率
-    每次从空仓→建仓 或 切换仓位算一次交易，统计该持仓期的总收益
+    每次仓位变化（建仓、切换方向、平仓）都结算上一段，统计该持仓期的总收益
     """
     if 'position' not in df.columns:
         return 0.0
@@ -151,33 +153,38 @@ def _calculate_trade_win_rate(df: pd.DataFrame) -> float:
     position = df['position'].fillna(0)
     trades = []
     current_trade_return = 0.0
-    in_trade = False
+    prev_pos = 0  # 前一个仓位
 
     for i in range(len(df)):
         pos = position.iloc[i]
 
-        if pos != 0:
-            # 在持仓中
-            if not in_trade:
-                # 新建仓
-                in_trade = True
+        # 检测仓位变化
+        if pos != prev_pos:
+            # 如果之前在持仓中，结算上一段
+            if prev_pos != 0:
+                trades.append(current_trade_return)
                 current_trade_return = 0.0
 
-            # 累加当日收益
-            if 'net_return' in df.columns:
-                current_trade_return += df['net_return'].iloc[i]
-            else:
-                current_trade_return += df['strategy_return'].iloc[i]
+            # 如果进入新持仓，重新开始累计
+            if pos != 0:
+                # 累加当日收益
+                if 'net_return' in df.columns:
+                    current_trade_return += df['net_return'].iloc[i]
+                else:
+                    current_trade_return += df['strategy_return'].iloc[i]
         else:
-            # 空仓
-            if in_trade:
-                # 结束一次交易
-                trades.append(current_trade_return)
-                in_trade = False
-                current_trade_return = 0.0
+            # 仓位不变
+            if pos != 0:
+                # 在持仓中，累加当日收益
+                if 'net_return' in df.columns:
+                    current_trade_return += df['net_return'].iloc[i]
+                else:
+                    current_trade_return += df['strategy_return'].iloc[i]
+
+        prev_pos = pos
 
     # 如果最后还在持仓，也算一次交易
-    if in_trade:
+    if prev_pos != 0:
         trades.append(current_trade_return)
 
     if len(trades) == 0:

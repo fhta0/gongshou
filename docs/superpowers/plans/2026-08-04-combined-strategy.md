@@ -276,26 +276,28 @@ def generate_combined_signals(
     low_hl_threshold = STRATEGY_CONFIG['low_hl_mom_pct_threshold']
     high_hl_threshold = STRATEGY_CONFIG['high_hl_mom_pct_threshold']
 
-    # 向量化条件
+    # 向量化条件（包含绝对动量下限 > 0）
     cy_stronger = cy_mom > hl_mom  # 平局归红利
     hl_stronger = ~cy_stronger
+    cy_positive = cy_mom > 0  # 绝对动量下限
+    hl_positive = hl_mom > 0
 
     # 低位区域
     low_mask = ratio_pct <= low_pct
-    low_cy_buy = low_mask & cy_stronger & (cy_mom_pct > low_cy_threshold)
-    low_hl_buy = low_mask & hl_stronger & (hl_mom_pct > low_hl_threshold)
+    low_cy_buy = low_mask & cy_stronger & cy_positive & (cy_mom_pct > low_cy_threshold)
+    low_hl_buy = low_mask & hl_stronger & hl_positive & (hl_mom_pct > low_hl_threshold)
 
     # 中间区域
     mid_mask = (ratio_pct > low_pct) & (ratio_pct < high_pct)
-    mid_cy_buy = mid_mask & cy_stronger & (cy_mom_pct > mid_threshold)
-    mid_hl_buy = mid_mask & hl_stronger & (hl_mom_pct > mid_threshold)
+    mid_cy_buy = mid_mask & cy_stronger & cy_positive & (cy_mom_pct > mid_threshold)
+    mid_hl_buy = mid_mask & hl_stronger & hl_positive & (hl_mom_pct > mid_threshold)
 
     # 高位区域
     high_mask = ratio_pct >= high_pct
-    high_cy_buy = high_mask & cy_stronger & (cy_mom_pct > high_cy_threshold)
-    high_hl_buy = high_mask & hl_stronger & (hl_mom_pct > high_hl_threshold)
+    high_cy_buy = high_mask & cy_stronger & cy_positive & (cy_mom_pct > high_cy_threshold)
+    high_hl_buy = high_mask & hl_stronger & hl_positive & (hl_mom_pct > high_hl_threshold)
 
-    # 合并信号
+    # 合并信号（包含绝对动量下限 > 0）
     signals = pd.Series(0, index=df.index, dtype=float)
     signals[low_cy_buy | mid_cy_buy | high_cy_buy] = 1.0
     signals[low_hl_buy | mid_hl_buy | high_hl_buy] = -1.0
@@ -318,7 +320,7 @@ Expected: 5 tests PASS
 
 ```bash
 git add strategy.py tests/test_strategy.py
-git commit -m "feat: 新增 generate_combined_signals 组合策略函数（使用动量百分位）"
+git commit -m "feat: 新增 generate_combined_signals 组合策略函数（使用动量百分位+绝对动量下限）"
 ```
 
 ---

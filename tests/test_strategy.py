@@ -169,3 +169,19 @@ def test_cooldown_prevents_rapid_switching():
     switches_with = (valid.diff().fillna(0) != 0).sum()
     switches_without = (valid_no_cooldown.diff().fillna(0) != 0).sum()
     assert switches_with <= switches_without
+
+
+def test_realtime_cooldown_blocks_switch():
+    """实时端冷却期：冷却期内不切换"""
+    from strategy import calculate_signal
+    # 第一次切换：cy 领先
+    _, state1, _ = calculate_signal(0.05, 0.02, 'cash', days_since_last_switch=999)
+    assert state1 == 'cy'
+
+    # 冷却期内：hl 领先但不允许切换
+    _, state2, _ = calculate_signal(0.02, 0.05, 'cy', days_since_last_switch=2)
+    assert state2 == 'cy'  # 保持 cy，不切换
+
+    # 冷却期外：允许切换
+    _, state3, _ = calculate_signal(0.02, 0.05, 'cy', days_since_last_switch=10)
+    assert state3 == 'hl'  # 切换为 hl

@@ -29,10 +29,11 @@
 
 - **比值位置** → 回答"这个资产便宜吗？"（值不值得买）
 - **动量方向** → 回答"趋势向哪走？"（什么时候买）
+- **动量百分位** → 自适应门槛，替代固定 rf 倍数
 
-极端低位 + 动量转正 = 最强买入信号
-极端高位 + 动量转负 = 最强卖出信号
-中间区域 = 按纯动量操作
+极端低位 + 动量百分位>30% = 强买入信号
+极端高位 + 动量百分位>70%（创业板）或>30%（红利）= 分化信号
+中间区域 = 动量百分位>50% 方可买入
 
 ---
 
@@ -67,25 +68,27 @@ cy_mom_percentile = cy_momentum.rolling(window=250).rank() / 250
 
 | 比值位置 \ 动量状态 | 创业板动量领先且强势 | 红利动量领先且强势 | 两者均弱势 |
 |---|---|---|---|
-| **低位（≤20%）** | 🔵 **强信号**买创业板 | 🔵 买创业板（放宽：动量百分位>30%即可） | ⚪ 空仓 |
+| **低位（≤20%）** | 🔵 买创业板（动量百分位>30%） | 🟠 买红利（动量百分位>50%） | ⚪ 空仓 |
 | **中间（20%~80%）** | 🔵 买创业板（动量百分位>50%） | 🟠 买红利（动量百分位>50%） | ⚪ 空仓 |
-| **高位（≥80%）** | 🔵 买创业板（收紧：动量百分位>70%） | 🟠 **强信号**买红利 | ⚪ 空仓 |
+| **高位（≥80%）** | 🔵 买创业板（收紧：动量百分位>70%） | 🟠 买红利（放宽：动量百分位>30%） | ⚪ 空仓 |
+
+**绝对动量下限（安全网）**：无论比值位置如何，两个指数的动量都必须 > 0 才能买入。这是为了防止在深度下跌市中"买最弱的强者"。
 
 具体规则：
 
 **低位区域（percentile ≤ 20%）：**
-- 创业板动量 > 红利动量 且 创业板动量百分位 > 30% → 🔵 买创业板（门槛降低）
-- 红利动量 > 创业板动量 且 红利动量百分位 > 50% → 🟠 买红利
+- 创业板动量 > 红利动量 且 创业板动量 > 0 且 创业板动量百分位 > 30% → 🔵 买创业板
+- 红利动量 > 创业板动量 且 红利动量 > 0 且 红利动量百分位 > 50% → 🟠 买红利
 - 否则 → ⚪ 空仓
 
 **中间区域（20% < percentile < 80%）：**
-- 创业板动量 > 红利动量 且 创业板动量百分位 > 50% → 🔵 买创业板
-- 红利动量 > 创业板动量 且 红利动量百分位 > 50% → 🟠 买红利
+- 创业板动量 > 红利动量 且 创业板动量 > 0 且 创业板动量百分位 > 50% → 🔵 买创业板
+- 红利动量 > 创业板动量 且 红利动量 > 0 且 红利动量百分位 > 50% → 🟠 买红利
 - 否则 → ⚪ 空仓
 
 **高位区域（percentile ≥ 80%）：**
-- 创业板动量 > 红利动量 且 创业板动量百分位 > 70% → 🔵 买创业板（门槛提高）
-- 红利动量 > 创业板动量 且 红利动量百分位 > 30% → 🟠 买红利（门槛降低）
+- 创业板动量 > 红利动量 且 创业板动量 > 0 且 创业板动量百分位 > 70% → 🔵 买创业板（门槛提高）
+- 红利动量 > 创业板动量 且 红利动量 > 0 且 红利动量百分位 > 30% → 🟠 买红利（门槛降低）
 - 否则 → ⚪ 空仓
 
 ### 2.4 信号输出
@@ -165,24 +168,26 @@ def generate_combined_signals(df: pd.DataFrame, window: int = None) -> pd.Series
     low_hl_threshold = STRATEGY_CONFIG['low_hl_mom_pct_threshold']
     high_hl_threshold = STRATEGY_CONFIG['high_hl_mom_pct_threshold']
 
-    # 向量化条件
+    # 向量化条件（包含绝对动量下限 > 0）
     cy_stronger = cy_mom > hl_mom  # 平局归红利
     hl_stronger = ~cy_stronger
+    cy_positive = cy_mom > 0  # 绝对动量下限
+    hl_positive = hl_mom > 0
 
     # 低位区域
     low_mask = ratio_pct <= low_pct
-    low_cy_buy = low_mask & cy_stronger & (cy_mom_pct > low_cy_threshold)
-    low_hl_buy = low_mask & hl_stronger & (hl_mom_pct > low_hl_threshold)
+    low_cy_buy = low_mask & cy_stronger & cy_positive & (cy_mom_pct > low_cy_threshold)
+    low_hl_buy = low_mask & hl_stronger & hl_positive & (hl_mom_pct > low_hl_threshold)
 
     # 中间区域
     mid_mask = (ratio_pct > low_pct) & (ratio_pct < high_pct)
-    mid_cy_buy = mid_mask & cy_stronger & (cy_mom_pct > mid_threshold)
-    mid_hl_buy = mid_mask & hl_stronger & (hl_mom_pct > mid_threshold)
+    mid_cy_buy = mid_mask & cy_stronger & cy_positive & (cy_mom_pct > mid_threshold)
+    mid_hl_buy = mid_mask & hl_stronger & hl_positive & (hl_mom_pct > mid_threshold)
 
     # 高位区域
     high_mask = ratio_pct >= high_pct
-    high_cy_buy = high_mask & cy_stronger & (cy_mom_pct > high_cy_threshold)
-    high_hl_buy = high_mask & hl_stronger & (hl_mom_pct > high_hl_threshold)
+    high_cy_buy = high_mask & cy_stronger & cy_positive & (cy_mom_pct > high_cy_threshold)
+    high_hl_buy = high_mask & hl_stronger & hl_positive & (hl_mom_pct > high_hl_threshold)
 
     # 合并信号
     signals = pd.Series(0, index=df.index, dtype=float)
@@ -227,9 +232,11 @@ def generate_combined_signals(df: pd.DataFrame, window: int = None) -> pd.Series
 ### 4.1 单元测试
 
 - `test_calculate_ratio_percentile`: 验证百分位计算正确性
-- `test_combined_signals_low_percentile`: 低位时放宽门槛
-- `test_combined_signals_high_percentile`: 高位时收紧门槛
-- `test_combined_signals_mid_percentile`: 中间等同纯动量
+- `test_calculate_momentum_percentile`: 验证动量百分位计算正确性
+- `test_combined_signals_low_percentile`: 低位时放宽创业板门槛
+- `test_combined_signals_high_percentile`: 高位时收紧创业板门槛
+- `test_combined_signals_mid_percentile`: 中间区域使用中间门槛
+- `test_combined_absolute_momentum_floor`: 验证动量<0时不买入
 - `test_backtest_combined`: 组合策略回测流程
 
 ### 4.2 回测验证
@@ -237,6 +244,7 @@ def generate_combined_signals(df: pd.DataFrame, window: int = None) -> pd.Series
 - 组合策略 vs 纯动量对比
 - 关注：年化收益是否提升、最大回撤是否降低、夏普是否改善
 - 参数敏感性：low/high 阈值从 10%/90% 到 30%/70% 扫描
+- 门槛敏感性：各区域动量百分位门槛 0.3/0.5/0.7 上下浮动 0.1
 
 ---
 
@@ -244,8 +252,8 @@ def generate_combined_signals(df: pd.DataFrame, window: int = None) -> pd.Series
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `config.py` | 修改 | 新增 `percentile_window`, `low_percentile`, `high_percentile` |
-| `strategy.py` | 修改 | 新增 `calculate_ratio_percentile()`, `generate_combined_signals()` |
+| `config.py` | 修改 | 新增 8 个参数：百分位窗口、阈值、动量百分位门槛 |
+| `strategy.py` | 修改 | 新增 `calculate_ratio_percentile()`, `calculate_momentum_percentile()`, `generate_combined_signals()` |
 | `backtester.py` | 修改 | `run_backtest()` 增加 `strategy_type` 参数 |
 | `app.py` | 修改 | 实时卡片增加百分位显示，回测增加策略选择和对比 |
 | `tests/test_strategy.py` | 修改 | 新增组合策略测试用例 |
@@ -255,7 +263,7 @@ def generate_combined_signals(df: pd.DataFrame, window: int = None) -> pd.Series
 
 ## 6. 风险与局限
 
-1. **参数增加**：组合策略多了 3 个参数（窗口、低阈值、高阈值），过拟合风险增大
-2. **循环性能**：初始实现用 for 循环，需要后续向量化优化
-3. **百分位滞后**：750 天窗口本身是滞后指标，极端行情时可能误判
-4. **回测期有限**：2015 年至今数据量约 2500 天，750 天窗口意味着前 3 年无百分位数据
+1. **参数增加**：组合策略新增 8 个参数（百分位窗口、比值阈值、5 个动量百分位门槛），过拟合风险增大。建议先跑参数敏感性测试确认阈值变化确实改变信号分布
+2. **百分位滞后**：750 天窗口本身是滞后指标，极端行情时可能误判
+3. **回测期有限**：2015 年至今数据量约 2500 天，750 天窗口意味着前 3 年无百分位数据
+4. **实现性能**：已向量化实现，但新增 2 个滚动百分位计算，回测耗时可能增加

@@ -91,7 +91,14 @@ def render_realtime_card(merged_data: pd.DataFrame):
     rf_period = STRATEGY_CONFIG['risk_free_rate'] * window / 252
 
     prev_state = st.session_state.get('prev_state', 'cash')
-    display, new_state, event = calculate_signal(cy_mom_today, hl_mom_today, prev_state)
+    days_since_switch = st.session_state.get('days_since_last_switch', 999)
+    display, new_state, event = calculate_signal(cy_mom_today, hl_mom_today, prev_state, days_since_switch)
+
+    # 更新状态和冷却计时
+    if new_state != prev_state:
+        st.session_state['days_since_last_switch'] = 0
+    else:
+        st.session_state['days_since_last_switch'] = days_since_switch + 1
     st.session_state['prev_state'] = new_state
 
     # 指标卡片

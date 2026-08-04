@@ -128,31 +128,41 @@ def generate_signals(
 def calculate_signal(
     cy_momentum: float,
     hl_momentum: float,
-    prev_state: str
+    prev_state: str,
+    days_since_last_switch: int = 999
 ) -> Tuple[dict, str, Optional[dict]]:
     """
     实时信号计算（用于 UI 卡片）
     使用 compare_momentum 统一平局处理（平局归红利）
+    接入冷却期：days_since_last_switch < cooldown_days 时不切换
 
     Args:
         cy_momentum: 创业板当前动量（20天涨跌幅）
         hl_momentum: 红利当前动量（20天涨跌幅）
         prev_state: 上一次状态 ('cy' / 'hl' / 'cash')
+        days_since_last_switch: 距离上次切换的天数（用于冷却期判断）
     Returns:
         (display_info, new_state, event_or_none)
     """
     rf_period = STRATEGY_CONFIG['risk_free_rate'] * STRATEGY_CONFIG['momentum_window'] / 252
+    cooldown_days = STRATEGY_CONFIG['cooldown_days']
 
     # 使用统一的比较函数
     leader = compare_momentum(cy_momentum, hl_momentum)
 
-    # 判断新状态
+    # 判断原始新状态（不考虑冷却）
     if leader == 'cy' and cy_momentum > rf_period:
-        new_state = 'cy'
+        raw_state = 'cy'
     elif leader == 'hl' and hl_momentum > rf_period:
-        new_state = 'hl'
+        raw_state = 'hl'
     else:
-        new_state = 'cash'
+        raw_state = 'cash'
+
+    # 应用冷却期：如果在冷却期内且状态变化，则保持原状态
+    if raw_state != prev_state and days_since_last_switch < cooldown_days:
+        new_state = prev_state  # 冷却期内不切换
+    else:
+        new_state = raw_state
 
     # 判断是否产生事件
     event = None
