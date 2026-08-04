@@ -1,58 +1,71 @@
-"""backtester.py"""
+"""
+backtester.py — 双动量策略回测引擎
+T 日数据生成信号，T+1 日执行交易（避免 look-ahead bias）
+"""
 import pandas as pd
 import streamlit as st
 from config import STRATEGY_CONFIG
-from strategy import calculate_rolling_percentile
+from strategy import generate_signals
 
 
 @st.cache_data
 def run_backtest(
     df: pd.DataFrame,
     window: int = None,
-    low_pct: float = None,
-    high_pct: float = None
+    transaction_cost: float = 0.001  # 单边 0.1%（含佣金+印花税+滑点）
 ) -> pd.DataFrame:
     """
-    回测历史信号，生成策略累计收益曲线
-    T 日数据生成信号，T+1 日执行交易（避免 look-ahead bias）
+    运行回测
+    Args:
+        df: 包含 date, close_cy, close_hl 的 DataFrame
+        window: 动量窗口（默认使用配置值）
+        transaction_cost: 单边交易成本，默认 0.1%
+    Returns:
+        包含信号、持仓、净值的 DataFrame
     """
     if window is None:
-        window = STRATEGY_CONFIG['rolling_window']
-    if low_pct is None:
-        low_pct = STRATEGY_CONFIG['low_percentile']
-    if high_pct is None:
-        high_pct = STRATEGY_CONFIG['high_percentile']
+        window = STRATEGY_CONFIG['momentum_window']
 
     result = df.copy()
 
-    # 1. 计算滚动百分位
-    result['percentile'] = calculate_rolling_percentile(result['ratio'], window)
+    # 1. 生成信号（T日）
+    result['signal'] = generate_signals(result, window)
 
-    # 2. 生成信号（T日）
-    result['signal'] = 0  # 0=中性, 1=抄底, -1=逃顶
-    result.loc[result['percentile'] <= low_pct, 'signal'] = 1
-    result.loc[result['percentile'] >= high_pct, 'signal'] = -1
-
-    # 3. 信号去重（前向填充持仓，兼容 Pandas 2.1+）
-    result['signal'] = result['signal'].mask(result['signal'] == 0).ffill().fillna(0)
-
-    # 4. T+1 执行
+    # 2. T+1 执行
     result['position'] = result['signal'].shift(1)
 
-    # 5. 计算每日收益
+    # 3. 检测仓位切换（用于计算交易成本）
+    position_change = result['position'].fillna(0).diff().fillna(0)
+    result['is_switch'] = (position_change != 0).astype(int)
+    # 第一次建仓也算一次切换
+    if result['position'].notna().any():
+        first_valid_idx = result['position'].first_valid_index()
+        if first_valid_idx is not None:
+            result.loc[first_valid_idx, 'is_switch'] = 1
+
+    # 4. 计算每日收益
     result['cy_return'] = result['close_cy'].pct_change()
     result['hl_return'] = result['close_hl'].pct_change()
 
-    # 6. 策略收益
+    # 5. 策略收益（毛收益）
     risk_free_daily = STRATEGY_CONFIG['risk_free_rate'] / 252
-    result['strategy_return'] = risk_free_daily
+    result['strategy_return'] = risk_free_daily  # 默认无风险收益
     result.loc[result['position'] == 1, 'strategy_return'] = result.loc[result['position'] == 1, 'cy_return']
     result.loc[result['position'] == -1, 'strategy_return'] = result.loc[result['position'] == -1, 'hl_return']
 
-    # 7. 累计净值
+    # 6. 扣除交易成本（仅在切换仓位时扣除）
+    result['transaction_cost'] = result['is_switch'] * transaction_cost
+    result['net_return'] = result['strategy_return'] - result['transaction_cost']
+
+    # 7. 累计净值（毛收益 vs 净收益）
     result['strategy_nav'] = (1 + result['strategy_return'].fillna(0)).cumprod()
+    result['strategy_nav_net'] = (1 + result['net_return'].fillna(0)).cumprod()
     result['cy_nav'] = (1 + result['cy_return'].fillna(0)).cumprod()
     result['hl_nav'] = (1 + result['hl_return'].fillna(0)).cumprod()
+
+    # 8. 动量列（用于图表展示）
+    result['cy_momentum'] = result['close_cy'].pct_change(window)
+    result['hl_momentum'] = result['close_hl'].pct_change(window)
 
     return result
 
@@ -61,44 +74,115 @@ def calculate_statistics(df: pd.DataFrame) -> dict:
     """
     计算回测统计指标
     Returns:
-        dict with keys: total_return, annualized_return, max_drawdown, sharpe_ratio, win_rate
+        dict with keys:
+        - gross_return, net_return: 毛收益/净收益
+        - annualized_return: 年化净收益
+        - max_drawdown: 基于净值的最大回撤
+        - sharpe_ratio: 基于净收益的夏普
+        - win_rate: 日胜率
+        - trade_count: 切换次数（含建仓）
+        - trade_win_rate: 交易胜率（按持仓期统计）
     """
-    nav = df['strategy_nav'].dropna()
-    returns = df['strategy_return'].dropna()
+    nav_net = df['strategy_nav_net'].dropna() if 'strategy_nav_net' in df.columns else df['strategy_nav'].dropna()
+    returns_net = df['net_return'].dropna() if 'net_return' in df.columns else df['strategy_return'].dropna()
+    returns_gross = df['strategy_return'].dropna()
 
-    if len(nav) < 2:
+    if len(nav_net) < 2:
         return {
-            'total_return': 0.0,
+            'gross_return': 0.0,
+            'net_return': 0.0,
             'annualized_return': 0.0,
             'max_drawdown': 0.0,
             'sharpe_ratio': 0.0,
-            'win_rate': 0.0
+            'win_rate': 0.0,
+            'trade_count': 0,
+            'trade_win_rate': 0.0
         }
 
-    # 总收益率
-    total_return = (nav.iloc[-1] / nav.iloc[0]) - 1
+    # 毛收益
+    gross_return = (df['strategy_nav'].iloc[-1] / df['strategy_nav'].iloc[0]) - 1 if 'strategy_nav' in df.columns else 0.0
 
-    # 年化收益率（252 交易日）
-    n_days = len(nav)
-    annualized_return = (1 + total_return) ** (252 / n_days) - 1
+    # 净收益
+    net_return = (nav_net.iloc[-1] / nav_net.iloc[0]) - 1
 
-    # 最大回撤
-    cummax = nav.cummax()
-    drawdown = (cummax - nav) / cummax
+    # 年化净收益率（252 交易日）
+    n_days = len(nav_net)
+    annualized_return = (1 + net_return) ** (252 / n_days) - 1
+
+    # 最大回撤（基于净净值）
+    cummax = nav_net.cummax()
+    drawdown = (cummax - nav_net) / cummax
     max_drawdown = drawdown.max()
 
-    # 夏普比率
+    # 夏普比率（基于净收益）
     risk_free_daily = STRATEGY_CONFIG['risk_free_rate'] / 252
-    excess_returns = returns - risk_free_daily
+    excess_returns = returns_net - risk_free_daily
     sharpe_ratio = (excess_returns.mean() / excess_returns.std()) * (252 ** 0.5) if excess_returns.std() > 0 else 0.0
 
-    # 胜率
-    win_rate = (returns > 0).sum() / len(returns) if len(returns) > 0 else 0.0
+    # 日胜率（保留兼容）
+    win_rate = (returns_gross > 0).sum() / len(returns_gross) if len(returns_gross) > 0 else 0.0
+
+    # 切换次数
+    trade_count = int(df['is_switch'].sum()) if 'is_switch' in df.columns else 0
+
+    # 交易胜率（按持仓期统计）
+    trade_win_rate = _calculate_trade_win_rate(df)
 
     return {
-        'total_return': total_return,
+        'gross_return': gross_return,
+        'net_return': net_return,
         'annualized_return': annualized_return,
         'max_drawdown': max_drawdown,
         'sharpe_ratio': sharpe_ratio,
-        'win_rate': win_rate
+        'win_rate': win_rate,
+        'trade_count': trade_count,
+        'trade_win_rate': trade_win_rate
     }
+
+
+def _calculate_trade_win_rate(df: pd.DataFrame) -> float:
+    """
+    按持仓期统计交易胜率
+    每次从空仓→建仓 或 切换仓位算一次交易，统计该持仓期的总收益
+    """
+    if 'position' not in df.columns:
+        return 0.0
+
+    position = df['position'].fillna(0)
+    trades = []
+    current_trade_return = 0.0
+    in_trade = False
+
+    for i in range(len(df)):
+        pos = position.iloc[i]
+
+        if pos != 0:
+            # 在持仓中
+            if not in_trade:
+                # 新建仓
+                in_trade = True
+                current_trade_return = 0.0
+
+            # 累加当日收益
+            if 'net_return' in df.columns:
+                current_trade_return += df['net_return'].iloc[i]
+            else:
+                current_trade_return += df['strategy_return'].iloc[i]
+        else:
+            # 空仓
+            if in_trade:
+                # 结束一次交易
+                trades.append(current_trade_return)
+                in_trade = False
+                current_trade_return = 0.0
+
+    # 如果最后还在持仓，也算一次交易
+    if in_trade:
+        trades.append(current_trade_return)
+
+    if len(trades) == 0:
+        return 0.0
+
+    # 盈利交易数 / 总交易数
+    winning_trades = sum(1 for t in trades if t > 0)
+    return winning_trades / len(trades)

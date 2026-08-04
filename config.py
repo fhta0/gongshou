@@ -1,5 +1,5 @@
 """
-全局配置：指数代码、阈值、窗口大小、无风险利率等
+全局配置：指数代码、动量参数、无风险利率等
 修改此文件即可适配其他指数对（如沪深300/中证500）
 """
 
@@ -10,13 +10,11 @@ STRATEGY_CONFIG = {
         "spot_code": "sz399006"
     },
     "symbol_b": {
-        "code": "H20922",
-        "name": "中证红利全收益",
+        "code": "000922",
+        "name": "中证红利",
         "spot_code": "sh000922"
     },
-    "rolling_window": 750,       # 3年交易日
-    "low_percentile": 0.10,      # 抄底阈值
-    "high_percentile": 0.90,     # 逃顶阈值
-    "risk_free_rate": 0.015,     # 年化无风险利率 1.5%
-    "cooldown_days": 20          # 信号冷却期（交易日）
+    "momentum_window": 20,           # 动量回看窗口（交易日）
+    "risk_free_rate": 0.015,         # 年化无风险利率 1.5%
+    "cooldown_days": 5               # 信号冷却期（防频繁切换）
 }
