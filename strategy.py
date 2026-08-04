@@ -275,11 +275,27 @@ def calculate_signal(
         elif new_state == 'cash':
             event = _state_to_event('cash', action_type='exit')
 
-    return _get_display_info(new_state), new_state, event
+    return _get_display_info(new_state, cy_momentum, hl_momentum), new_state, event
 
 
-def _state_to_event(state: str, action_type: str) -> dict:
+def _state_to_event(state: str, action_type: str,
+                    cy_momentum: float = None, hl_momentum: float = None) -> dict:
     """将状态转为事件字典"""
+    rf_period = STRATEGY_CONFIG['risk_free_rate'] * STRATEGY_CONFIG['momentum_window'] / 252
+
+    # 空仓描述：根据实际动量值动态生成
+    if state == 'cash':
+        if cy_momentum is not None and hl_momentum is not None:
+            both_neg = cy_momentum < 0 and hl_momentum < 0
+            if both_neg:
+                desc = '两者动量均为负'
+            else:
+                desc = f'动量未达门槛（需 > {rf_period:.2%}）'
+        else:
+            desc = '动量条件不满足'
+    else:
+        desc = None  # 使用默认描述
+
     events = {
         'cy': {
             'signal': '买入创业板',
@@ -301,7 +317,7 @@ def _state_to_event(state: str, action_type: str) -> dict:
             'signal': '空仓观望',
             'color': 'gray',
             'emoji': '⚪',
-            'description': '两者动量均为负',
+            'description': desc or '动量条件不满足',
             'action': '持有现金/货币基金',
             'type': action_type
         }
@@ -309,6 +325,8 @@ def _state_to_event(state: str, action_type: str) -> dict:
     return events[state]
 
 
-def _get_display_info(state: str) -> dict:
+def _get_display_info(state: str, cy_momentum: float = None,
+                      hl_momentum: float = None) -> dict:
     """返回当前状态的展示信息"""
-    return _state_to_event(state, action_type='hold')
+    return _state_to_event(state, action_type='hold',
+                           cy_momentum=cy_momentum, hl_momentum=hl_momentum)
