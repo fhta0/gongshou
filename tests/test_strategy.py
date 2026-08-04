@@ -187,6 +187,56 @@ def test_realtime_cooldown_blocks_switch():
     assert state3 == 'hl'  # 切换为 hl
 
 
+def test_cooldown_first_load_not_blocked():
+    """首次加载（days_since_last_switch=999）不受冷却期限制
+
+    回归测试：页面刷新后 prev_state 默认 'cash'，如果 last_switch_date 是当天，
+    days_since_switch=0 会错误地阻止切换到真实信号。
+    修复：首次加载时传入 days_since_last_switch=999。
+    """
+    from strategy import calculate_signal
+    # 红利明显领先（hl=+3.7%, cy=-4.1%），首次加载应直接给出 hl 信号
+    _, state, _ = calculate_signal(-0.041, 0.037, 'cash', days_since_last_switch=999)
+    assert state == 'hl'
+
+
+def test_cooldown_same_day_blocks_when_state_was_set():
+    """非首次加载：当天内切换过就应阻止再次切换"""
+    from strategy import calculate_signal
+    # prev_state='cash' 是本次 session 设置的（非首次加载），当天内不允许切换
+    _, state, _ = calculate_signal(-0.041, 0.037, 'cash', days_since_last_switch=0)
+    assert state == 'cash'  # 冷却中，保持 cash
+
+
+# ===== 空仓描述动态化测试 =====
+
+def test_cash_description_both_negative():
+    """两者动量均为负时，描述应包含'均为负'"""
+    from strategy import calculate_signal
+    display, state, _ = calculate_signal(-0.02, -0.01, 'cy', days_since_last_switch=999)
+    assert state == 'cash'
+    assert '均为负' in display['description']
+
+
+def test_cash_description_below_threshold():
+    """动量为正但未达门槛时，描述应包含'未达门槛'"""
+    from strategy import calculate_signal
+    # hl=+0.05% > 0 但 < rf_period=0.12%
+    display, state, _ = calculate_signal(-0.02, 0.0005, 'hl', days_since_last_switch=999)
+    assert state == 'cash'
+    assert '未达门槛' in display['description']
+    assert '+0.05%' in display['description']
+
+
+def test_cash_description_includes_actual_values():
+    """空仓描述应包含实际动量数值"""
+    from strategy import calculate_signal
+    display, state, _ = calculate_signal(-0.03, -0.01, 'cy', days_since_last_switch=999)
+    assert state == 'cash'
+    assert '-3.00%' in display['description']
+    assert '-1.00%' in display['description']
+
+
 # ===== calculate_ratio_percentile 测试 =====
 
 def test_ratio_percentile_basic():
