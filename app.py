@@ -124,13 +124,16 @@ def render_realtime_card(merged_data: pd.DataFrame):
     # 冷却期：从文件加载初始值（防止刷新丢失）
     prev_state = st.session_state.get('prev_state', 'cash')
     last_switch_date = st.session_state.get('last_switch_date', None)
+    _first_load = 'prev_state' not in st.session_state  # 是否首次加载（无真实切换历史）
     if last_switch_date is None:
         last_switch_date = _load_cooldown_state()
         if last_switch_date is not None:
             st.session_state['last_switch_date'] = last_switch_date
 
     # 计算距离上次切换的交易日数（使用merged_data的日期序列）
-    if last_switch_date is not None:
+    # 首次加载时，如果 prev_state 是默认值 'cash'（不是本次 session 真实设置的），
+    # 则视为无冷却（days_since_switch=999），避免把默认状态当作"刚切换"
+    if last_switch_date is not None and not _first_load:
         dates = merged_data['date']
         last_switch_idx = dates[dates == last_switch_date].index
         if len(last_switch_idx) > 0:
@@ -142,6 +145,14 @@ def render_realtime_card(merged_data: pd.DataFrame):
         days_since_switch = 999
 
     display, new_state, event = calculate_signal(cy_mom_today, hl_mom_today, prev_state, days_since_switch)
+
+    # 动态计算描述（不依赖 strategy 模块的静态描述）
+    if new_state == 'cash':
+        both_neg = cy_mom_today < 0 and hl_mom_today < 0
+        if both_neg:
+            display['description'] = f'两者动量均为负（创业板 {cy_mom_today:+.2%}，红利 {hl_mom_today:+.2%}）'
+        else:
+            display['description'] = f'动量未达门槛（需 > {rf_period:.2%}），当前：创业板 {cy_mom_today:+.2%}，红利 {hl_mom_today:+.2%}'
 
     # 更新状态和冷却计时
     if new_state != prev_state:
