@@ -371,6 +371,60 @@ def test_trend_filter_default_off():
     pd.testing.assert_series_equal(signals_default, signals_off)
 
 
+# ===== 动量衰竭退出测试 =====
+
+def test_decay_exit_blocks_when_momentum_percentile_low():
+    """动量百分位低于阈值时，信号强制为 0"""
+    from strategy import generate_signals
+    # 构造：CY 突然反弹使短期动量为正且领先，但长期百分位仍很低
+    # 300 天平稳数据建立高百分位基线，最后突然 CY 下跌后微反弹
+    np.random.seed(42)
+    n = 300
+    # 前 295 天：两者平稳上涨
+    cy_base = list(np.linspace(1000, 1500, 295))
+    hl_base = list(np.linspace(900, 1400, 295))
+    # 最后 5 天：CY 急跌后微反弹（短期动量可能仍为正但百分位下降）
+    cy_tail = [1480, 1460, 1450, 1455, 1460]
+    hl_tail = [1390, 1395, 1398, 1400, 1402]
+    cy = cy_base + cy_tail
+    hl = hl_base + hl_tail
+    df = pd.DataFrame({'close_cy': cy, 'close_hl': hl})
+    # 启用衰竭退出（高阈值 0.80 以确保触发）
+    signals = generate_signals(df, window=3, apply_cooldown=False, apply_decay_exit=True, decay_exit_threshold=0.80)
+    # CY 刚急跌，百分位应很低；如果信号是 1（买 CY），应被衰竭退出阻止
+    if not pd.isna(signals.iloc[-1]):
+        # 要么信号已经是 0（原本就没有入场条件），要么被衰竭退出阻止为 0
+        assert signals.iloc[-1] == 0.0
+
+
+def test_decay_exit_preserves_strong_momentum():
+    """动量百分位高时，信号不变"""
+    from strategy import generate_signals
+    # 300 天加速上涨（动量递增 → 百分位接近 1.0），CY 一直比 HL 强
+    n = 300
+    cy = 1000 * np.cumprod(1 + np.linspace(0.001, 0.005, n))
+    hl = 900 * np.cumprod(1 + np.linspace(0.0005, 0.003, n))
+    df = pd.DataFrame({'close_cy': cy, 'close_hl': hl})
+    signals_no_exit = generate_signals(df, window=3, apply_cooldown=False, apply_decay_exit=False)
+    signals_exit = generate_signals(df, window=3, apply_cooldown=False, apply_decay_exit=True, decay_exit_threshold=0.20)
+    # 动量百分位高（加速上涨），衰竭退出不应该阻止
+    assert signals_no_exit.iloc[-1] == 1.0
+    assert signals_exit.iloc[-1] == 1.0
+
+
+def test_decay_exit_default_off():
+    """默认不启用衰竭退出"""
+    from strategy import generate_signals
+    np.random.seed(42)
+    n = 300
+    cy = list(np.linspace(1000, 1500, n))
+    hl = list(np.linspace(900, 1400, n))
+    df = pd.DataFrame({'close_cy': cy, 'close_hl': hl})
+    signals_default = generate_signals(df, window=3, apply_cooldown=False)
+    signals_off = generate_signals(df, window=3, apply_cooldown=False, apply_decay_exit=False)
+    pd.testing.assert_series_equal(signals_default, signals_off)
+
+
 # ===== calculate_ratio_percentile 测试 =====
 
 def test_ratio_percentile_basic():

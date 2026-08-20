@@ -32,4 +32,5 @@ STRATEGY_CONFIG = {
     "high_cy_mom_pct_threshold": 0.70,   # 高位时创业板动量百分位门槛
     "low_hl_mom_pct_threshold": 0.50,    # 低位时红利动量百分位门槛
     "high_hl_mom_pct_threshold": 0.30,   # 高位时红利动量百分位门槛
+    "decay_exit_threshold": 0.20,        # 动量衰竭退出阈值（动量百分位低于此值退出）
 }

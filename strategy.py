@@ -91,6 +91,36 @@ def compare_momentum(cy_mom: float, hl_mom: float) -> str:
         return 'hl'  # 平局归红利
 
 
+def _apply_momentum_decay_exit(
+    raw_signals: pd.Series,
+    cy_mom_pct: pd.Series,
+    hl_mom_pct: pd.Series,
+    threshold: float = None
+) -> pd.Series:
+    """
+    动量衰竭退出：信号为买入某标的但该标的动量百分位 < threshold 时改为空仓。
+    阈值(0.20) < 所有入场门槛(0.30~0.70)，只影响"曾经满足入场后衰减"的持仓。
+
+    Args:
+        raw_signals: 原始信号序列
+        cy_mom_pct: 创业板动量百分位
+        hl_mom_pct: 红利动量百分位
+        threshold: 衰竭阈值，默认取 config 值
+
+    Returns:
+        衰竭退出后的信号序列
+    """
+    if threshold is None:
+        threshold = STRATEGY_CONFIG.get('decay_exit_threshold', 0.20)
+
+    result = raw_signals.copy()
+    # CY 持仓但动量百分位过低 → 空仓
+    result[(result == 1) & (cy_mom_pct < threshold)] = 0.0
+    # HL 持仓但动量百分位过低 → 空仓
+    result[(result == -1) & (hl_mom_pct < threshold)] = 0.0
+    return result
+
+
 def _apply_trend_filter(
     raw_signals: pd.Series,
     close_cy: pd.Series,
@@ -174,7 +204,9 @@ def generate_signals(
     window: int = None,
     apply_cooldown: bool = True,
     apply_trend_filter: bool = False,
-    trend_filter_windows: list = None
+    trend_filter_windows: list = None,
+    apply_decay_exit: bool = False,
+    decay_exit_threshold: float = None
 ) -> pd.Series:
     """
     向量化生成全量信号（用于回测）
@@ -182,8 +214,10 @@ def generate_signals(
         df: 包含 close_cy, close_hl 的 DataFrame
         window: 动量窗口
         apply_cooldown: 是否应用冷却期（默认 True）
-        apply_trend_filter: 是否应用长周期趋势过滤（默认 False，A/B 验证时开启）
+        apply_trend_filter: 是否应用长周期趋势过滤（默认 False）
         trend_filter_windows: 趋势过滤窗口列表（默认取 config 值）
+        apply_decay_exit: 是否应用动量衰竭退出（默认 False）
+        decay_exit_threshold: 衰竭退出阈值（默认取 config 值）
     Returns:
         信号序列：1=创业板, -1=红利, 0=空仓
     """
@@ -211,6 +245,13 @@ def generate_signals(
     if apply_trend_filter:
         raw_signals = _apply_trend_filter(raw_signals, df['close_cy'], df['close_hl'], trend_filter_windows)
 
+    # 动量衰竭退出
+    if apply_decay_exit:
+        mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
+        cy_mom_pct = calculate_momentum_percentile(cy_mom, mom_pct_window)
+        hl_mom_pct = calculate_momentum_percentile(hl_mom, mom_pct_window)
+        raw_signals = _apply_momentum_decay_exit(raw_signals, cy_mom_pct, hl_mom_pct, decay_exit_threshold)
+
     # 应用冷却期
     if apply_cooldown:
         return _apply_cooldown(raw_signals)
@@ -223,7 +264,9 @@ def generate_combined_signals(
     window: int = None,
     apply_cooldown: bool = True,
     apply_trend_filter: bool = False,
-    trend_filter_windows: list = None
+    trend_filter_windows: list = None,
+    apply_decay_exit: bool = False,
+    decay_exit_threshold: float = None
 ) -> pd.Series:
     """
     组合策略：比值位置 + 双动量（使用动量百分位作为自适应门槛）
@@ -233,8 +276,10 @@ def generate_combined_signals(
         df: 包含 close_cy, close_hl, ratio 的 DataFrame
         window: 动量窗口
         apply_cooldown: 是否应用冷却期（默认 True）
-        apply_trend_filter: 是否应用长周期趋势过滤（默认 False，A/B 验证时开启）
+        apply_trend_filter: 是否应用长周期趋势过滤（默认 False）
         trend_filter_windows: 趋势过滤窗口列表（默认取 config 值）
+        apply_decay_exit: 是否应用动量衰竭退出（默认 False）
+        decay_exit_threshold: 衰竭退出阈值（默认取 config 值）
     Returns:
         信号序列：1=创业板, -1=红利, 0=空仓
     """
@@ -295,6 +340,10 @@ def generate_combined_signals(
     # 趋势过滤（冷却期之前）
     if apply_trend_filter:
         raw_signals = _apply_trend_filter(raw_signals, df['close_cy'], df['close_hl'], trend_filter_windows)
+
+    # 动量衰竭退出
+    if apply_decay_exit:
+        raw_signals = _apply_momentum_decay_exit(raw_signals, cy_mom_pct, hl_mom_pct, decay_exit_threshold)
 
     # 应用冷却期
     if apply_cooldown:

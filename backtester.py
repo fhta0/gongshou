@@ -15,7 +15,9 @@ def run_backtest(
     transaction_cost: float = 0.001,  # 单边 0.1%（含佣金+印花税+滑点）
     strategy_type: str = 'momentum',  # 'momentum' 或 'combined'
     apply_trend_filter: bool = False,
-    trend_filter_windows: list = None
+    trend_filter_windows: list = None,
+    apply_decay_exit: bool = False,
+    decay_exit_threshold: float = None
 ) -> pd.DataFrame:
     """
     运行回测
@@ -26,6 +28,8 @@ def run_backtest(
         strategy_type: 'momentum'（纯动量）或 'combined'（组合策略）
         apply_trend_filter: 是否应用长周期趋势过滤（默认 False）
         trend_filter_windows: 趋势过滤窗口列表（默认取 config 值）
+        apply_decay_exit: 是否应用动量衰竭退出（默认 False）
+        decay_exit_threshold: 衰竭退出阈值（默认取 config 值）
     Returns:
         包含信号、持仓、净值的 DataFrame
     """
@@ -55,13 +59,17 @@ def run_backtest(
         result['signal'] = generate_combined_signals(
             result, window,
             apply_trend_filter=apply_trend_filter,
-            trend_filter_windows=trend_filter_windows
+            trend_filter_windows=trend_filter_windows,
+            apply_decay_exit=apply_decay_exit,
+            decay_exit_threshold=decay_exit_threshold
         )
     else:
         result['signal'] = generate_signals(
             result, window,
             apply_trend_filter=apply_trend_filter,
-            trend_filter_windows=trend_filter_windows
+            trend_filter_windows=trend_filter_windows,
+            apply_decay_exit=apply_decay_exit,
+            decay_exit_threshold=decay_exit_threshold
         )
 
     # 1b. 信号强度 + 动量百分位列
