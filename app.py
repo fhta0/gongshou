@@ -156,6 +156,48 @@ def render_realtime_card(merged_data: pd.DataFrame):
 
     display, new_state, event = calculate_signal(cy_mom_today, hl_mom_today, prev_state, days_since_switch)
 
+    # 计算百分位（用于衰减退出 + 展示，纳入今日盘中实时修正）
+    mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
+    cy_close_ext = pd.concat([merged_data['close_cy'], pd.Series([cy_close_today])], ignore_index=True)
+    hl_close_ext = pd.concat([merged_data['close_hl'], pd.Series([hl_close_today])], ignore_index=True)
+    cy_mom_smooth_ext = calculate_smoothed_momentum(cy_close_ext)
+    hl_mom_smooth_ext = calculate_smoothed_momentum(hl_close_ext)
+    cy_mom_pct_series = calculate_momentum_percentile(cy_mom_smooth_ext, mom_pct_window)
+    hl_mom_pct_series = calculate_momentum_percentile(hl_mom_smooth_ext, mom_pct_window)
+    cy_mom_pct_today = cy_mom_pct_series.iloc[-1] if not pd.isna(cy_mom_pct_series.iloc[-1]) else None
+    hl_mom_pct_today = hl_mom_pct_series.iloc[-1] if not pd.isna(hl_mom_pct_series.iloc[-1]) else None
+
+    # 衰减退出（与回测对齐）：动量百分位低于阈值时强制空仓
+    decay_threshold = STRATEGY_CONFIG.get('decay_exit_threshold', 0.20)
+    decay_exit_triggered = False
+    if new_state == 'cy' and cy_mom_pct_today is not None and cy_mom_pct_today < decay_threshold:
+        new_state = 'cash'
+        decay_exit_triggered = True
+        display = {'signal': '空仓', 'color': 'red', 'emoji': '⚪',
+                   'description': f'动量衰竭退出（创业板动量百分位 {cy_mom_pct_today:.0%} < {decay_threshold:.0%}）',
+                   'action': '空仓观望'}
+    elif new_state == 'hl' and hl_mom_pct_today is not None and hl_mom_pct_today < decay_threshold:
+        new_state = 'cash'
+        decay_exit_triggered = True
+        display = {'signal': '空仓', 'color': 'red', 'emoji': '⚪',
+                   'description': f'动量衰竭退出（红利动量百分位 {hl_mom_pct_today:.0%} < {decay_threshold:.0%}）',
+                   'action': '空仓观望'}
+
+    # 波动率目标仓位缩放（与回测对齐）
+    vol_lookback = STRATEGY_CONFIG.get('vol_lookback', 60)
+    target_vol = STRATEGY_CONFIG.get('target_vol', 0.14)
+    vol_scale = 1.0  # 默认满仓
+    if new_state == 'cy' and len(cy_close_ext) > vol_lookback:
+        cy_returns = cy_close_ext.pct_change().dropna()
+        cy_realized_vol = cy_returns.iloc[-vol_lookback:].std() * (252 ** 0.5)
+        if cy_realized_vol > 0:
+            vol_scale = min(target_vol / cy_realized_vol, 1.0)
+    elif new_state == 'hl' and len(hl_close_ext) > vol_lookback:
+        hl_returns = hl_close_ext.pct_change().dropna()
+        hl_realized_vol = hl_returns.iloc[-vol_lookback:].std() * (252 ** 0.5)
+        if hl_realized_vol > 0:
+            vol_scale = min(target_vol / hl_realized_vol, 1.0)
+
     # 动态计算描述（不依赖 strategy 模块的静态描述）
     if new_state == 'cash':
         both_neg = cy_mom_today < 0 and hl_mom_today < 0
@@ -170,17 +212,6 @@ def render_realtime_card(merged_data: pd.DataFrame):
         st.session_state['last_switch_date'] = switch_date
         _save_cooldown_state(switch_date)
     st.session_state['prev_state'] = new_state
-
-    # 计算百分位（用于展示，纳入今日盘中实时修正）
-    mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
-    cy_close_ext = pd.concat([merged_data['close_cy'], pd.Series([cy_close_today])], ignore_index=True)
-    hl_close_ext = pd.concat([merged_data['close_hl'], pd.Series([hl_close_today])], ignore_index=True)
-    cy_mom_smooth_ext = calculate_smoothed_momentum(cy_close_ext)
-    hl_mom_smooth_ext = calculate_smoothed_momentum(hl_close_ext)
-    cy_mom_pct_series = calculate_momentum_percentile(cy_mom_smooth_ext, mom_pct_window)
-    hl_mom_pct_series = calculate_momentum_percentile(hl_mom_smooth_ext, mom_pct_window)
-    cy_mom_pct_today = cy_mom_pct_series.iloc[-1] if not pd.isna(cy_mom_pct_series.iloc[-1]) else None
-    hl_mom_pct_today = hl_mom_pct_series.iloc[-1] if not pd.isna(hl_mom_pct_series.iloc[-1]) else None
 
     pct_window = STRATEGY_CONFIG['percentile_window']
     ratio_pct_series = calculate_ratio_percentile(merged_data['ratio'], pct_window)
@@ -259,8 +290,15 @@ def render_realtime_card(merged_data: pd.DataFrame):
             help=f"创业板/红利比值在过去 {pct_window} 天中的位置"
         )
 
-    # 信号强度
-    st.caption(f"信号强度：{signal_strength}")
+    # 信号强度 + 波动率仓位
+    scale_col, info_col = st.columns([2, 1])
+    with scale_col:
+        st.caption(f"信号强度：{signal_strength}")
+    with info_col:
+        if new_state != 'cash':
+            st.caption(f"波动率仓位：**{vol_scale:.0%}**（目标 {target_vol:.0%} / 实现波动率）")
+        elif decay_exit_triggered:
+            st.caption("衰减退出已触发")
 
     # 信号描述
     if display['color'] == 'blue':
@@ -278,6 +316,8 @@ def render_realtime_card(merged_data: pd.DataFrame):
         - 🟠 **买入红利**：红利平滑动量 > 创业板平滑动量 且 > {rf_period:.2%}
         - ⚪ **空仓观望**：两者平滑动量均为负
         - 📊 **平滑方式**：取 {momentum_windows} 天动量的均值，减少单一窗口因基准价跳变导致的信号不稳定
+        - 🛡️ **动量衰竭退出**：持仓标的动量百分位 < {decay_threshold:.0%} 时强制空仓（阈值 {decay_threshold:.0%}）
+        - 📉 **波动率目标仓位**：目标年化波动率 {target_vol:.0%}，回看 {vol_lookback} 天实现波动率，仓位 = min(目标/实现, 100%)
         """)
 
     if event and event['type'] == 'entry':
@@ -429,6 +469,14 @@ def render_backtest_tab(merged_data: pd.DataFrame):
             index=0
         )
         compare = st.checkbox("对比两种策略", value=False)
+        st.markdown("**风控机制**（默认启用，与实时信号对齐）")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            use_decay_exit = st.checkbox("动量衰竭退出", value=True,
+                help="持仓标的动量百分位 < 20% 时强制空仓")
+        with col_b:
+            use_vol_target = st.checkbox("波动率目标仓位", value=True,
+                help=f"目标年化波动率 {STRATEGY_CONFIG.get('target_vol', 0.14):.0%}，回看 {STRATEGY_CONFIG.get('vol_lookback', 60)} 天")
         st.markdown("点击按钮开始回测（可能需要几秒钟）")
         submitted = st.form_submit_button("🚀 开始回测")
 
@@ -436,14 +484,16 @@ def render_backtest_tab(merged_data: pd.DataFrame):
         strategy_type = 'combined' if '组合' in strategy_choice else 'momentum'
 
         with st.spinner(f"正在计算回测（{strategy_choice}）..."):
-            backtest_result = run_backtest(merged_data, strategy_type=strategy_type)
+            backtest_result = run_backtest(merged_data, strategy_type=strategy_type,
+                apply_decay_exit=use_decay_exit, apply_vol_target=use_vol_target)
             stats = calculate_statistics(backtest_result)
 
         compare_result = None
         compare_stats = None
         if compare:
             other_type = 'momentum' if strategy_type == 'combined' else 'combined'
-            compare_result = run_backtest(merged_data, strategy_type=other_type)
+            compare_result = run_backtest(merged_data, strategy_type=other_type,
+                apply_decay_exit=use_decay_exit, apply_vol_target=use_vol_target)
             compare_stats = calculate_statistics(compare_result)
 
         if compare and compare_result is not None:
