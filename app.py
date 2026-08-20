@@ -199,7 +199,8 @@ def render_realtime_card(merged_data: pd.DataFrame):
             vol_scale = min(target_vol / hl_realized_vol, 1.0)
 
     # 动态计算描述（不依赖 strategy 模块的静态描述）
-    if new_state == 'cash':
+    # 衰减退出时保留其专属描述，不被 cash 分支覆盖
+    if new_state == 'cash' and not decay_exit_triggered:
         both_neg = cy_mom_today < 0 and hl_mom_today < 0
         if both_neg:
             display['description'] = f'两者动量均为负（创业板 {cy_mom_today:+.2%}，红利 {hl_mom_today:+.2%}）'

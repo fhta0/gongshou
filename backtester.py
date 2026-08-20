@@ -131,14 +131,16 @@ def run_backtest(
     result.loc[result['position'] == -1, 'strategy_return'] = result.loc[result['position'] == -1, 'hl_return']
 
     # 5b. 波动率目标仓位（按日缩放）
+    # T+1 纪律：t 日仓位由 t-1 收盘数据决定，波动率也必须用截至 t-1 的数据
+    # shift(1) 确保 vol[t] 只包含 return[1..t-1]，不含 return[t]
     if apply_vol_target:
         if target_vol is None:
             target_vol = STRATEGY_CONFIG.get('target_vol', 0.12)
         if vol_lookback is None:
             vol_lookback = STRATEGY_CONFIG.get('vol_lookback', 20)
-        # 滚动年化波动率
-        cy_vol = result['cy_return'].rolling(vol_lookback).std() * (252 ** 0.5)
-        hl_vol = result['hl_return'].rolling(vol_lookback).std() * (252 ** 0.5)
+        # 滚动年化波动率（shift(1) 避免前视）
+        cy_vol = result['cy_return'].shift(1).rolling(vol_lookback).std() * (252 ** 0.5)
+        hl_vol = result['hl_return'].shift(1).rolling(vol_lookback).std() * (252 ** 0.5)
         # 按持仓取对应波动率
         vol = pd.Series(np.nan, index=result.index)
         vol[result['position'] == 1] = cy_vol[result['position'] == 1]
@@ -148,9 +150,11 @@ def run_backtest(
         # 策略收益 = scale × 标的收益 + (1-scale) × 无风险收益
         result['vol_scale'] = scale
         result['strategy_return'] = scale * result['strategy_return'] + (1 - scale) * risk_free_daily
+    else:
+        scale = pd.Series(1.0, index=result.index)
 
-    # 6. 扣除交易成本（仅在切换仓位时扣除）
-    result['transaction_cost'] = result['is_switch'] * transaction_cost
+    # 6. 扣除交易成本（按仓位缩放：vol target 下实际交易额 = scale × 名义本金）
+    result['transaction_cost'] = result['is_switch'] * transaction_cost * scale
     result['net_return'] = result['strategy_return'] - result['transaction_cost']
 
     # 7. 累计净值（毛收益 vs 净收益）

@@ -245,16 +245,16 @@ def generate_signals(
     if apply_trend_filter:
         raw_signals = _apply_trend_filter(raw_signals, df['close_cy'], df['close_hl'], trend_filter_windows)
 
-    # 动量衰竭退出
+    # 应用冷却期（在衰减退出之前，与实时端一致）
+    if apply_cooldown:
+        raw_signals = _apply_cooldown(raw_signals)
+
+    # 动量衰竭退出（冷却期之后，安全退出不该被冷却挡住）
     if apply_decay_exit:
         mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
         cy_mom_pct = calculate_momentum_percentile(cy_mom, mom_pct_window)
         hl_mom_pct = calculate_momentum_percentile(hl_mom, mom_pct_window)
         raw_signals = _apply_momentum_decay_exit(raw_signals, cy_mom_pct, hl_mom_pct, decay_exit_threshold)
-
-    # 应用冷却期
-    if apply_cooldown:
-        return _apply_cooldown(raw_signals)
 
     return raw_signals
 
@@ -341,13 +341,13 @@ def generate_combined_signals(
     if apply_trend_filter:
         raw_signals = _apply_trend_filter(raw_signals, df['close_cy'], df['close_hl'], trend_filter_windows)
 
-    # 动量衰竭退出
+    # 应用冷却期（在衰减退出之前，与实时端一致）
+    if apply_cooldown:
+        raw_signals = _apply_cooldown(raw_signals)
+
+    # 动量衰竭退出（冷却期之后，安全退出不该被冷却挡住）
     if apply_decay_exit:
         raw_signals = _apply_momentum_decay_exit(raw_signals, cy_mom_pct, hl_mom_pct, decay_exit_threshold)
-
-    # 应用冷却期
-    if apply_cooldown:
-        return _apply_cooldown(raw_signals)
 
     return raw_signals
 
