@@ -3,6 +3,7 @@ backtester.py — 双动量策略回测引擎
 T 日数据生成信号，T+1 日执行交易（避免 look-ahead bias）
 """
 import pandas as pd
+import numpy as np
 import streamlit as st
 from config import STRATEGY_CONFIG
 from strategy import generate_signals, generate_combined_signals, calculate_ratio_percentile, calculate_momentum_percentile, calculate_smoothed_momentum
@@ -17,7 +18,10 @@ def run_backtest(
     apply_trend_filter: bool = False,
     trend_filter_windows: list = None,
     apply_decay_exit: bool = False,
-    decay_exit_threshold: float = None
+    decay_exit_threshold: float = None,
+    apply_vol_target: bool = False,
+    target_vol: float = None,
+    vol_lookback: int = None
 ) -> pd.DataFrame:
     """
     运行回测
@@ -30,6 +34,9 @@ def run_backtest(
         trend_filter_windows: 趋势过滤窗口列表（默认取 config 值）
         apply_decay_exit: 是否应用动量衰竭退出（默认 False）
         decay_exit_threshold: 衰竭退出阈值（默认取 config 值）
+        apply_vol_target: 是否应用波动率目标仓位（默认 False）
+        target_vol: 目标年化波动率（默认取 config 值）
+        vol_lookback: 实现波动率回看窗口（默认取 config 值）
     Returns:
         包含信号、持仓、净值的 DataFrame
     """
@@ -122,6 +129,25 @@ def run_backtest(
     result['strategy_return'] = risk_free_daily  # 默认无风险收益
     result.loc[result['position'] == 1, 'strategy_return'] = result.loc[result['position'] == 1, 'cy_return']
     result.loc[result['position'] == -1, 'strategy_return'] = result.loc[result['position'] == -1, 'hl_return']
+
+    # 5b. 波动率目标仓位（按日缩放）
+    if apply_vol_target:
+        if target_vol is None:
+            target_vol = STRATEGY_CONFIG.get('target_vol', 0.12)
+        if vol_lookback is None:
+            vol_lookback = STRATEGY_CONFIG.get('vol_lookback', 20)
+        # 滚动年化波动率
+        cy_vol = result['cy_return'].rolling(vol_lookback).std() * (252 ** 0.5)
+        hl_vol = result['hl_return'].rolling(vol_lookback).std() * (252 ** 0.5)
+        # 按持仓取对应波动率
+        vol = pd.Series(np.nan, index=result.index)
+        vol[result['position'] == 1] = cy_vol[result['position'] == 1]
+        vol[result['position'] == -1] = hl_vol[result['position'] == -1]
+        # scale = target_vol / vol，封顶 1.0（不加杠杆）；空仓/NaN 时 scale=1.0
+        scale = (target_vol / vol).clip(upper=1.0).fillna(1.0)
+        # 策略收益 = scale × 标的收益 + (1-scale) × 无风险收益
+        result['vol_scale'] = scale
+        result['strategy_return'] = scale * result['strategy_return'] + (1 - scale) * risk_free_daily
 
     # 6. 扣除交易成本（仅在切换仓位时扣除）
     result['transaction_cost'] = result['is_switch'] * transaction_cost

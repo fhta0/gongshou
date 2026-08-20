@@ -33,4 +33,8 @@ STRATEGY_CONFIG = {
     "low_hl_mom_pct_threshold": 0.50,    # 低位时红利动量百分位门槛
     "high_hl_mom_pct_threshold": 0.30,   # 高位时红利动量百分位门槛
     "decay_exit_threshold": 0.20,        # 动量衰竭退出阈值（动量百分位低于此值退出）
+
+    # 波动率目标仓位
+    "target_vol": 0.12,                  # 目标年化波动率 12%
+    "vol_lookback": 20,                  # 实现波动率回看窗口（交易日）
 }

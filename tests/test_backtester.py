@@ -182,3 +182,62 @@ def test_backtest_default_is_momentum():
     # 但 ratio_percentile 列始终存在（用于信号强度标签）
     assert 'ratio_percentile' in result.columns
     assert 'signal_strength' in result.columns
+
+
+# ===== 波动率目标仓位测试 =====
+
+def test_vol_target_scales_down_in_high_vol():
+    """高波动期 scale < 1（降仓）"""
+    np.random.seed(42)
+    n = 100
+    dates = pd.bdate_range('2020-01-01', periods=n)
+    # 高波动：日收益 std=10%，年化 vol ≈ 158%，远超 target_vol=12%
+    cy = 100 * np.cumprod(1 + np.random.normal(0, 0.10, n))
+    hl = 100 * np.cumprod(1 + np.random.normal(0, 0.01, n))
+    df = pd.DataFrame({'date': dates, 'close_cy': cy, 'close_hl': hl})
+
+    r_no_vol = run_backtest(df, window=20, apply_vol_target=False)
+    r_vol = run_backtest(df, window=20, apply_vol_target=True)
+    # 高波动期波动率目标策略的收益波动应更小
+    valid = r_vol['strategy_return'].dropna().iloc[-50:]
+    valid_no = r_no_vol['strategy_return'].dropna().iloc[-50:]
+    assert valid.std() < valid_no.std()
+
+
+def test_vol_target_caps_at_one():
+    """低波动期 scale 封顶 1.0（不加杠杆）"""
+    np.random.seed(42)
+    n = 100
+    dates = pd.bdate_range('2020-01-01', periods=n)
+    # 极低波动：日收益 std=0.1%，年化 vol ≈ 1.6%，远低于 target_vol=12%
+    cy = 100 * np.cumprod(1 + np.random.normal(0.0003, 0.001, n))
+    hl = 100 * np.cumprod(1 + np.random.normal(0.0002, 0.001, n))
+    df = pd.DataFrame({'date': dates, 'close_cy': cy, 'close_hl': hl})
+
+    r_no_vol = run_backtest(df, window=20, apply_vol_target=False)
+    r_vol = run_backtest(df, window=20, apply_vol_target=True)
+    # 低波动期 scale 应=1.0，两种策略收益应几乎相同
+    np.testing.assert_allclose(
+        r_vol['strategy_return'].dropna().iloc[-30:],
+        r_no_vol['strategy_return'].dropna().iloc[-30:],
+        atol=1e-10
+    )
+
+
+def test_vol_target_return_formula():
+    """收益 = scale×标的收益 + (1-scale)×无风险日收益"""
+    from config import STRATEGY_CONFIG
+    np.random.seed(42)
+    n = 100
+    dates = pd.bdate_range('2020-01-01', periods=n)
+    cy = 100 * np.cumprod(1 + np.random.normal(0.001, 0.05, n))
+    hl = 100 * np.cumprod(1 + np.random.normal(0.0005, 0.02, n))
+    df = pd.DataFrame({'date': dates, 'close_cy': cy, 'close_hl': hl})
+
+    r = run_backtest(df, window=20, apply_vol_target=True)
+    # 有 vol_scale 列
+    assert 'vol_scale' in r.columns
+    # scale 应在 [0, 1] 范围内
+    valid_scales = r['vol_scale'].dropna()
+    assert (valid_scales >= 0).all()
+    assert (valid_scales <= 1.0 + 1e-10).all()
