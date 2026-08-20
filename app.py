@@ -13,7 +13,7 @@ from streamlit_autorefresh import st_autorefresh
 from config import STRATEGY_CONFIG
 from data_loader import load_merged_data, get_realtime_change
 from strategy import (
-    calculate_signal, calculate_momentum,
+    calculate_signal, calculate_smoothed_momentum,
     calculate_ratio_percentile, calculate_momentum_percentile
 )
 from backtester import run_backtest, calculate_statistics
@@ -99,14 +99,17 @@ def render_signal_tab(merged_data: pd.DataFrame):
 def render_realtime_card(merged_data: pd.DataFrame):
     st.subheader("当前信号")
 
-    # 计算历史动量
+    # 计算历史动量（多窗口平滑 + 单窗口用于对比展示）
     window = STRATEGY_CONFIG['momentum_window']
-    cy_mom_series = calculate_momentum(merged_data['close_cy'], window)
-    hl_mom_series = calculate_momentum(merged_data['close_hl'], window)
+    momentum_windows = STRATEGY_CONFIG.get('momentum_windows', [10, 20, 40])
+
+    # 平滑动量序列（用于信号和百分位）
+    cy_mom_smooth_series = calculate_smoothed_momentum(merged_data['close_cy'])
+    hl_mom_smooth_series = calculate_smoothed_momentum(merged_data['close_hl'])
 
     # 昨日动量
-    cy_mom_hist = cy_mom_series.iloc[-1]
-    hl_mom_hist = hl_mom_series.iloc[-1]
+    cy_mom_hist = cy_mom_smooth_series.iloc[-1]
+    hl_mom_hist = hl_mom_smooth_series.iloc[-1]
 
     # 盘中实时修正
     cy_change = get_realtime_change(STRATEGY_CONFIG['symbol_a']['spot_code'])
@@ -115,9 +118,16 @@ def render_realtime_card(merged_data: pd.DataFrame):
     cy_close_today = merged_data['close_cy'].iloc[-1] * (1 + cy_change)
     hl_close_today = merged_data['close_hl'].iloc[-1] * (1 + hl_change)
 
-    # 用今天的价格重算动量
-    cy_mom_today = (cy_close_today / merged_data['close_cy'].iloc[-window]) - 1 if len(merged_data) > window else 0
-    hl_mom_today = (hl_close_today / merged_data['close_hl'].iloc[-window]) - 1 if len(merged_data) > window else 0
+    # 用今天的价格重算各窗口动量，然后取均值（平滑）
+    n = len(merged_data)
+    cy_mom_vals = []
+    hl_mom_vals = []
+    for w in momentum_windows:
+        if n > w:
+            cy_mom_vals.append((cy_close_today / merged_data['close_cy'].iloc[-w]) - 1)
+            hl_mom_vals.append((hl_close_today / merged_data['close_hl'].iloc[-w]) - 1)
+    cy_mom_today = sum(cy_mom_vals) / len(cy_mom_vals) if cy_mom_vals else 0
+    hl_mom_today = sum(hl_mom_vals) / len(hl_mom_vals) if hl_mom_vals else 0
 
     rf_period = STRATEGY_CONFIG['risk_free_rate'] * window / 252
 
@@ -161,10 +171,14 @@ def render_realtime_card(merged_data: pd.DataFrame):
         _save_cooldown_state(switch_date)
     st.session_state['prev_state'] = new_state
 
-    # 计算百分位（用于展示）
+    # 计算百分位（用于展示，纳入今日盘中实时修正）
     mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
-    cy_mom_pct_series = calculate_momentum_percentile(cy_mom_series, mom_pct_window)
-    hl_mom_pct_series = calculate_momentum_percentile(hl_mom_series, mom_pct_window)
+    cy_close_ext = pd.concat([merged_data['close_cy'], pd.Series([cy_close_today])], ignore_index=True)
+    hl_close_ext = pd.concat([merged_data['close_hl'], pd.Series([hl_close_today])], ignore_index=True)
+    cy_mom_smooth_ext = calculate_smoothed_momentum(cy_close_ext)
+    hl_mom_smooth_ext = calculate_smoothed_momentum(hl_close_ext)
+    cy_mom_pct_series = calculate_momentum_percentile(cy_mom_smooth_ext, mom_pct_window)
+    hl_mom_pct_series = calculate_momentum_percentile(hl_mom_smooth_ext, mom_pct_window)
     cy_mom_pct_today = cy_mom_pct_series.iloc[-1] if not pd.isna(cy_mom_pct_series.iloc[-1]) else None
     hl_mom_pct_today = hl_mom_pct_series.iloc[-1] if not pd.isna(hl_mom_pct_series.iloc[-1]) else None
 
@@ -196,18 +210,32 @@ def render_realtime_card(merged_data: pd.DataFrame):
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(
-            "创业板动量",
+            "创业板动量（平滑）",
             f"{cy_mom_today:+.2%}",
-            delta=f"昨日 {cy_mom_hist:+.2%}" if not pd.isna(cy_mom_hist) else None
+            delta=f"昨日 {cy_mom_hist:+.2%}" if not pd.isna(cy_mom_hist) else None,
+            help=f"多窗口平滑：{momentum_windows}天动量均值"
         )
     with col2:
         st.metric(
-            "红利动量",
+            "红利动量（平滑）",
             f"{hl_mom_today:+.2%}",
-            delta=f"昨日 {hl_mom_hist:+.2%}" if not pd.isna(hl_mom_hist) else None
+            delta=f"昨日 {hl_mom_hist:+.2%}" if not pd.isna(hl_mom_hist) else None,
+            help=f"多窗口平滑：{momentum_windows}天动量均值"
         )
     with col3:
         st.metric("状态", f"{display['emoji']} {display['signal']}")
+
+    # 各窗口动量明细
+    detail_cols = st.columns(len(momentum_windows))
+    for idx, w in enumerate(momentum_windows):
+        if n > w:
+            cy_w = (cy_close_today / merged_data['close_cy'].iloc[-w]) - 1
+            hl_w = (hl_close_today / merged_data['close_hl'].iloc[-w]) - 1
+        else:
+            cy_w = hl_w = None
+        with detail_cols[idx]:
+            if cy_w is not None:
+                st.caption(f"**{w}天**: 创业板 {cy_w:+.2%} | 红利 {hl_w:+.2%}")
 
     # 百分位指标
     st.caption("📈 历史百分位（越高=越强/越贵）")
@@ -245,10 +273,11 @@ def render_realtime_card(merged_data: pd.DataFrame):
     # 策略说明
     with st.expander("📖 策略说明"):
         st.markdown(f"""
-        **双动量策略**（回看窗口: {window}天，无风险利率: {STRATEGY_CONFIG['risk_free_rate']:.1%}/年）
-        - 🔵 **买入创业板**：创业板动量 > 红利动量 且 > {rf_period:.2%}（{window}天无门槛收益）
-        - 🟠 **买入红利**：红利动量 > 创业板动量 且 > {rf_period:.2%}
-        - ⚪ **空仓观望**：两者动量均为负
+        **双动量策略**（多窗口平滑: {momentum_windows}天，无风险利率: {STRATEGY_CONFIG['risk_free_rate']:.1%}/年）
+        - 🔵 **买入创业板**：创业板平滑动量 > 红利平滑动量 且 > {rf_period:.2%}（{window}天无门槛收益）
+        - 🟠 **买入红利**：红利平滑动量 > 创业板平滑动量 且 > {rf_period:.2%}
+        - ⚪ **空仓观望**：两者平滑动量均为负
+        - 📊 **平滑方式**：取 {momentum_windows} 天动量的均值，减少单一窗口因基准价跳变导致的信号不稳定
         """)
 
     if event and event['type'] == 'entry':
@@ -317,9 +346,9 @@ def render_ratio_chart(merged_data: pd.DataFrame):
                       fillcolor=zone_colors[prev_zone], line_width=0,
                       layer="below", row=1, col=1)
 
-    # 中图：动量对比
-    cy_mom = calculate_momentum(merged_data['close_cy'], window)
-    hl_mom = calculate_momentum(merged_data['close_hl'], window)
+    # 中图：动量对比（平滑）
+    cy_mom = calculate_smoothed_momentum(merged_data['close_cy'])
+    hl_mom = calculate_smoothed_momentum(merged_data['close_hl'])
 
     fig.add_trace(go.Scattergl(
         x=merged_data['date'], y=cy_mom,
@@ -456,16 +485,14 @@ def _render_backtest_metrics(stats: dict):
     with col5:
         st.metric("夏普比率", f"{stats['sharpe_ratio']:.2f}")
 
-    col6, col7, col8, col9 = st.columns(4)
+    col6, col7, col8 = st.columns(3)
     with col6:
-        st.metric("日胜率", f"{stats['win_rate']:.2%}")
-    with col7:
         st.metric("交易胜率", f"{stats['trade_win_rate']:.2%}",
                   help="按持仓期统计，每次开平仓算一次交易")
-    with col8:
+    with col7:
         st.metric("切换次数", f"{stats['trade_count']}次",
                   help="仓位切换次数（含首次建仓）")
-    with col9:
+    with col8:
         avg_cost = stats['trade_count'] * 0.001
         st.metric("累计成本", f"{avg_cost:.2%}",
                   help="交易成本估算（单边0.1%×切换次数）")

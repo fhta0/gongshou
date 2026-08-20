@@ -86,7 +86,6 @@ def test_statistics_structure():
     assert 'annualized_return' in stats
     assert 'max_drawdown' in stats
     assert 'sharpe_ratio' in stats
-    assert 'win_rate' in stats
     assert 'trade_count' in stats
     assert 'trade_win_rate' in stats
 
@@ -141,7 +140,6 @@ def test_backtest_with_real_data():
     stats = calculate_statistics(result)
 
     assert stats['net_return'] != 0.0
-    assert 0 <= stats['win_rate'] <= 1
     assert stats['max_drawdown'] >= 0
     assert stats['trade_count'] >= 0
     assert len(result) == n

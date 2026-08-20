@@ -21,6 +21,30 @@ def calculate_momentum(close_series: pd.Series, window: int = 20) -> pd.Series:
     return close_series.pct_change(window)
 
 
+def calculate_smoothed_momentum(
+    close_series: pd.Series,
+    windows: list = None
+) -> pd.Series:
+    """
+    多窗口平滑动量：取多个窗口动量的均值
+    减少单一窗口因基准价跳变导致的动量不稳定
+
+    Args:
+        close_series: 收盘价序列
+        windows: 回看窗口列表，默认 [10, 20, 40]
+
+    Returns:
+        平滑后的动量序列
+    """
+    if windows is None:
+        windows = STRATEGY_CONFIG.get('momentum_windows', [10, 20, 40])
+
+    momenta = [calculate_momentum(close_series, w) for w in windows]
+    # 按列拼接后取行均值（自动忽略 NaN）
+    combined = pd.concat(momenta, axis=1)
+    return combined.mean(axis=1, skipna=True)
+
+
 def calculate_ratio_percentile(ratio_series: pd.Series, window: int = 750) -> pd.Series:
     """
     计算比值的滚动百分位（历史位置）
@@ -129,8 +153,8 @@ def generate_signals(
 
     rf_period = STRATEGY_CONFIG['risk_free_rate'] * window / 252
 
-    cy_mom = calculate_momentum(df['close_cy'], window)
-    hl_mom = calculate_momentum(df['close_hl'], window)
+    cy_mom = calculate_smoothed_momentum(df['close_cy'])
+    hl_mom = calculate_smoothed_momentum(df['close_hl'])
 
     # 向量化条件（平局归红利：cy_stronger 需要严格大于）
     cy_stronger = cy_mom > hl_mom
@@ -170,9 +194,9 @@ def generate_combined_signals(
     if window is None:
         window = STRATEGY_CONFIG['momentum_window']
 
-    # 计算动量
-    cy_mom = calculate_momentum(df['close_cy'], window)
-    hl_mom = calculate_momentum(df['close_hl'], window)
+    # 计算动量（多窗口平滑）
+    cy_mom = calculate_smoothed_momentum(df['close_cy'])
+    hl_mom = calculate_smoothed_momentum(df['close_hl'])
 
     # 计算比值百分位
     pct_window = STRATEGY_CONFIG['percentile_window']
@@ -240,8 +264,8 @@ def calculate_signal(
     接入冷却期：days_since_last_switch < cooldown_days 时不切换
 
     Args:
-        cy_momentum: 创业板当前动量（20天涨跌幅）
-        hl_momentum: 红利当前动量（20天涨跌幅）
+        cy_momentum: 创业板当前动量（多窗口平滑动量）
+        hl_momentum: 红利当前动量（多窗口平滑动量）
         prev_state: 上一次状态 ('cy' / 'hl' / 'cash')
         days_since_last_switch: 距离上次切换的天数（用于冷却期判断）
     Returns:

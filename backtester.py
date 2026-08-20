@@ -5,7 +5,7 @@ T 日数据生成信号，T+1 日执行交易（避免 look-ahead bias）
 import pandas as pd
 import streamlit as st
 from config import STRATEGY_CONFIG
-from strategy import generate_signals, generate_combined_signals, calculate_ratio_percentile, calculate_momentum_percentile
+from strategy import generate_signals, generate_combined_signals, calculate_ratio_percentile, calculate_momentum_percentile, calculate_smoothed_momentum
 
 
 @st.cache_data
@@ -40,10 +40,10 @@ def run_backtest(
     )
     mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
     cy_mom_pct = calculate_momentum_percentile(
-        result['close_cy'].pct_change(window), mom_pct_window
+        calculate_smoothed_momentum(result['close_cy']), mom_pct_window
     )
     hl_mom_pct = calculate_momentum_percentile(
-        result['close_hl'].pct_change(window), mom_pct_window
+        calculate_smoothed_momentum(result['close_hl']), mom_pct_window
     )
 
     # 1. 生成信号（T日）
@@ -129,13 +129,11 @@ def calculate_statistics(df: pd.DataFrame) -> dict:
         - annualized_return: 年化净收益
         - max_drawdown: 基于净值的最大回撤
         - sharpe_ratio: 基于净收益的夏普
-        - win_rate: 日胜率
         - trade_count: 切换次数（含建仓）
         - trade_win_rate: 交易胜率（按持仓期统计）
     """
     nav_net = df['strategy_nav_net'].dropna() if 'strategy_nav_net' in df.columns else df['strategy_nav'].dropna()
     returns_net = df['net_return'].dropna() if 'net_return' in df.columns else df['strategy_return'].dropna()
-    returns_gross = df['strategy_return'].dropna()
 
     if len(nav_net) < 2:
         return {
@@ -144,7 +142,6 @@ def calculate_statistics(df: pd.DataFrame) -> dict:
             'annualized_return': 0.0,
             'max_drawdown': 0.0,
             'sharpe_ratio': 0.0,
-            'win_rate': 0.0,
             'trade_count': 0,
             'trade_win_rate': 0.0
         }
@@ -169,9 +166,6 @@ def calculate_statistics(df: pd.DataFrame) -> dict:
     excess_returns = returns_net - risk_free_daily
     sharpe_ratio = (excess_returns.mean() / excess_returns.std()) * (252 ** 0.5) if excess_returns.std() > 0 else 0.0
 
-    # 日胜率（保留兼容）
-    win_rate = (returns_gross > 0).sum() / len(returns_gross) if len(returns_gross) > 0 else 0.0
-
     # 切换次数
     trade_count = int(df['is_switch'].sum()) if 'is_switch' in df.columns else 0
 
@@ -184,7 +178,6 @@ def calculate_statistics(df: pd.DataFrame) -> dict:
         'annualized_return': annualized_return,
         'max_drawdown': max_drawdown,
         'sharpe_ratio': sharpe_ratio,
-        'win_rate': win_rate,
         'trade_count': trade_count,
         'trade_win_rate': trade_win_rate
     }

@@ -2,7 +2,7 @@
 import pandas as pd
 import numpy as np
 import pytest
-from strategy import calculate_momentum, generate_signals, calculate_signal
+from strategy import calculate_momentum, calculate_smoothed_momentum, generate_signals, calculate_signal
 
 
 # ===== calculate_momentum 测试 =====
@@ -30,6 +30,51 @@ def test_momentum_window_20():
     result = calculate_momentum(series, window=20)
     assert result.iloc[:20].isna().all()
     assert result.iloc[20:].notna().all()
+
+
+# ===== calculate_smoothed_momentum 测试 =====
+
+def test_smoothed_momentum_basic():
+    """多窗口平滑 = 各窗口动量的均值"""
+    series = pd.Series([100.0, 105, 110, 108, 115, 120, 118, 125, 130, 128])
+    result = calculate_smoothed_momentum(series, windows=[2, 3])
+    mom_2 = calculate_momentum(series, 2)
+    mom_3 = calculate_momentum(series, 3)
+    # 从第3个值开始两个窗口都有值
+    expected = (mom_2 + mom_3) / 2
+    assert result.iloc[3] == pytest.approx(expected.iloc[3], abs=0.001)
+    assert result.iloc[-1] == pytest.approx(expected.iloc[-1], abs=0.001)
+
+
+def test_smoothed_momentum_single_window():
+    """单窗口时等同于普通动量"""
+    series = pd.Series([100.0, 105, 110, 108, 115])
+    result = calculate_smoothed_momentum(series, windows=[2])
+    expected = calculate_momentum(series, 2)
+    assert result.iloc[2] == pytest.approx(expected.iloc[2], abs=0.001)
+    assert result.iloc[-1] == pytest.approx(expected.iloc[-1], abs=0.001)
+
+
+def test_smoothed_momentum_reduces_volatility():
+    """平滑后动量的日间跳变更小"""
+    np.random.seed(42)
+    # 构造有大幅波动的价格序列
+    series = pd.Series(100 * np.cumprod(1 + np.random.normal(0, 0.05, 100)))
+    smooth = calculate_smoothed_momentum(series, windows=[5, 10, 20])
+    raw_5 = calculate_momentum(series, 5)
+    # 比较日间跳变（一阶差分）的波动
+    smooth_diff = smooth.dropna().diff().dropna().std()
+    raw_diff = raw_5.dropna().diff().dropna().std()
+    assert smooth_diff < raw_diff
+
+
+def test_smoothed_momentum_default_windows():
+    """默认使用 config 中的 momentum_windows"""
+    series = pd.Series(100 * np.cumprod(1 + np.random.normal(0, 0.02, 50)))
+    result = calculate_smoothed_momentum(series)
+    # 数据长度50，最大窗口40，应该有有效值
+    assert result.iloc[-1] > 0 or result.iloc[-1] < 0  # 不是 NaN
+    assert not pd.isna(result.iloc[-1])
 
 
 # ===== generate_signals 测试 =====
