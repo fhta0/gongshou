@@ -32,6 +32,27 @@ def _generate_demo_data() -> pd.DataFrame:
     })
 
 
+def _apply_dividend_adjustment(close: pd.Series, dividend_yield: float = None) -> pd.Series:
+    """
+    对价格指数序列叠加股息再投资，近似全收益指数
+    公式：adjusted[t] = adjusted[t-1] × (1 + 日价格收益 + 年化股息率/252)
+
+    Args:
+        close: 价格指数收盘价序列
+        dividend_yield: 年化股息率（默认取 config 的 dividend_yield，4.5%）
+
+    Returns:
+        叠加股息再投资后的近似全收益序列
+    """
+    if close.empty:
+        return close
+    if dividend_yield is None:
+        dividend_yield = STRATEGY_CONFIG.get('dividend_yield', 0.045)
+    div_daily = dividend_yield / 252
+    total_return = close.pct_change() + div_daily
+    return close.iloc[0] * (1 + total_return.fillna(0)).cumprod()
+
+
 @st.cache_data(ttl=3600)
 def load_historical_cy() -> pd.DataFrame:
     """
@@ -67,6 +88,8 @@ def load_historical_hl() -> pd.DataFrame:
         result.columns = ['date', 'close']
         result['date'] = pd.to_datetime(result['date'])
         result['close'] = result['close'].astype(float)
+        # 价格指数 → 近似全收益：叠加股息再投资（H20922 数据源不可用，见 spec §2.1）
+        result['close'] = _apply_dividend_adjustment(result['close'])
         return result
     except Exception:
         return pd.DataFrame(columns=['date', 'close'])
