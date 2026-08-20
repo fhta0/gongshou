@@ -35,6 +35,6 @@ STRATEGY_CONFIG = {
     "decay_exit_threshold": 0.20,        # 动量衰竭退出阈值（动量百分位低于此值退出）
 
     # 波动率目标仓位
-    "target_vol": 0.12,                  # 目标年化波动率 12%
-    "vol_lookback": 20,                  # 实现波动率回看窗口（交易日）
+    "target_vol": 0.15,                  # 目标年化波动率 15%（约束优化 DD≤25% 边界最优）
+    "vol_lookback": 60,                  # 实现波动率回看窗口（交易日，60d 比 20d 更平滑）
 }
