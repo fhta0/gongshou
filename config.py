@@ -16,6 +16,7 @@ STRATEGY_CONFIG = {
     },
     "momentum_window": 20,           # 主窗口（用于无风险门槛计算）
     "momentum_windows": [10, 20, 40],  # 多窗口平滑（取均值，减少基准跳变）
+    "trend_filter_windows": [60, 120, 200],  # 长周期趋势过滤窗口（多窗口平滑）
     "risk_free_rate": 0.015,         # 年化无风险利率 1.5%
     "dividend_yield": 0.045,         # 中证红利历史股息率常数近似（年化，价格指数→全收益折算）
     "cooldown_days": 5,              # 信号冷却期（防频繁切换）

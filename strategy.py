@@ -91,6 +91,41 @@ def compare_momentum(cy_mom: float, hl_mom: float) -> str:
         return 'hl'  # 平局归红利
 
 
+def _apply_trend_filter(
+    raw_signals: pd.Series,
+    close_cy: pd.Series,
+    close_hl: pd.Series,
+    windows: list = None
+) -> pd.Series:
+    """
+    长周期趋势过滤：持有标的的长周期平滑动量必须 > 0，否则强制空仓。
+    与短周期一致的平滑口径（calculate_smoothed_momentum）。
+
+    Args:
+        raw_signals: 原始信号序列（1=CY, -1=HL, 0=空仓, NaN=数据不足）
+        close_cy: 创业板收盘价序列
+        close_hl: 红利收盘价序列
+        windows: 长周期窗口列表，默认 [60, 120, 200]
+
+    Returns:
+        过滤后的信号序列
+    """
+    if windows is None:
+        windows = STRATEGY_CONFIG.get('trend_filter_windows', [60, 120, 200])
+
+    cy_trend = calculate_smoothed_momentum(close_cy, windows)
+    hl_trend = calculate_smoothed_momentum(close_hl, windows)
+
+    result = raw_signals.copy()
+    # CY 持仓但 CY 长周期趋势 ≤ 0 → 空仓
+    result[(result == 1) & ~(cy_trend > 0)] = 0.0
+    # HL 持仓但 HL 长周期趋势 ≤ 0 → 空仓
+    result[(result == -1) & ~(hl_trend > 0)] = 0.0
+    # 趋势数据不足（暖机期）→ 保持 NaN，不把"无数据"当"看空"
+    result[cy_trend.isna() | hl_trend.isna()] = np.nan
+    return result
+
+
 def _apply_cooldown(signals: pd.Series) -> pd.Series:
     """
     应用冷却期：信号切换后 N 天内不再切换
@@ -137,7 +172,9 @@ def _apply_cooldown(signals: pd.Series) -> pd.Series:
 def generate_signals(
     df: pd.DataFrame,
     window: int = None,
-    apply_cooldown: bool = True
+    apply_cooldown: bool = True,
+    apply_trend_filter: bool = False,
+    trend_filter_windows: list = None
 ) -> pd.Series:
     """
     向量化生成全量信号（用于回测）
@@ -145,6 +182,8 @@ def generate_signals(
         df: 包含 close_cy, close_hl 的 DataFrame
         window: 动量窗口
         apply_cooldown: 是否应用冷却期（默认 True）
+        apply_trend_filter: 是否应用长周期趋势过滤（默认 False，A/B 验证时开启）
+        trend_filter_windows: 趋势过滤窗口列表（默认取 config 值）
     Returns:
         信号序列：1=创业板, -1=红利, 0=空仓
     """
@@ -168,6 +207,10 @@ def generate_signals(
     # 数据不足时设为 NaN
     raw_signals[cy_mom.isna()] = np.nan
 
+    # 趋势过滤（冷却期之前）
+    if apply_trend_filter:
+        raw_signals = _apply_trend_filter(raw_signals, df['close_cy'], df['close_hl'], trend_filter_windows)
+
     # 应用冷却期
     if apply_cooldown:
         return _apply_cooldown(raw_signals)
@@ -178,7 +221,9 @@ def generate_signals(
 def generate_combined_signals(
     df: pd.DataFrame,
     window: int = None,
-    apply_cooldown: bool = True
+    apply_cooldown: bool = True,
+    apply_trend_filter: bool = False,
+    trend_filter_windows: list = None
 ) -> pd.Series:
     """
     组合策略：比值位置 + 双动量（使用动量百分位作为自适应门槛）
@@ -188,6 +233,8 @@ def generate_combined_signals(
         df: 包含 close_cy, close_hl, ratio 的 DataFrame
         window: 动量窗口
         apply_cooldown: 是否应用冷却期（默认 True）
+        apply_trend_filter: 是否应用长周期趋势过滤（默认 False，A/B 验证时开启）
+        trend_filter_windows: 趋势过滤窗口列表（默认取 config 值）
     Returns:
         信号序列：1=创业板, -1=红利, 0=空仓
     """
@@ -244,6 +291,10 @@ def generate_combined_signals(
 
     # 数据不足时设为 NaN
     raw_signals[cy_mom.isna() | ratio_pct.isna() | cy_mom_pct.isna()] = np.nan
+
+    # 趋势过滤（冷却期之前）
+    if apply_trend_filter:
+        raw_signals = _apply_trend_filter(raw_signals, df['close_cy'], df['close_hl'], trend_filter_windows)
 
     # 应用冷却期
     if apply_cooldown:

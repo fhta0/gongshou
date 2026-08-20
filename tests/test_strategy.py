@@ -282,6 +282,95 @@ def test_cash_description_includes_actual_values():
     assert '-1.00%' in display['description']
 
 
+# ===== 趋势过滤测试 =====
+
+def test_trend_filter_blocks_when_long_momentum_negative():
+    """长周期平滑动量为负时，信号强制为 0"""
+    from strategy import generate_signals
+    # 构造"熊市反弹"：长期下行 200 天，然后 50 天强反弹
+    # 短周期动量 [10,20,40] 在反弹段为正 → 原信号=1
+    # 长周期趋势 [60,120,200] 仍为负（跨越反弹→下跌段）→ 趋势过滤应阻止
+    np.random.seed(99)
+    n = 250
+    # CY：200 天从 3000 跌到 1800，然后 50 天强反弹到 2200
+    cy_decline = list(np.linspace(3000, 1800, 200))
+    cy_rebound = list(np.linspace(1820, 2200, 50))
+    cy = cy_decline + cy_rebound
+    # HL：更弱下跌，小幅反弹 → CY 短期动量更强
+    hl_decline = list(np.linspace(2500, 1600, 200))
+    hl_rebound = list(np.linspace(1610, 1700, 50))
+    hl = hl_decline + hl_rebound
+    df = pd.DataFrame({'close_cy': cy, 'close_hl': hl})
+    # 不启用趋势过滤：CY 短期动量更强且为正 → 信号=1
+    signals_no_tf = generate_signals(df, window=3, apply_cooldown=False, apply_trend_filter=False)
+    # 启用趋势过滤（默认 [60,120,200]）：长周期趋势为负 → 信号应为 0
+    signals_tf = generate_signals(df, window=3, apply_cooldown=False, apply_trend_filter=True)
+    assert signals_no_tf.iloc[-1] == 1.0, f"Expected 1.0 without TF, got {signals_no_tf.iloc[-1]}"
+    assert signals_tf.iloc[-1] == 0.0, f"Expected 0.0 with TF, got {signals_tf.iloc[-1]}"
+
+
+def test_trend_filter_preserves_signal_when_positive():
+    """长周期平滑动量为正时，不改变原信号"""
+    from strategy import generate_signals
+    # 构造：长期上行，短期也上行
+    n = 250
+    cy = list(np.linspace(1000, 2500, 200)) + list(np.linspace(2520, 2900, 50))
+    hl = list(np.linspace(900, 2000, 200)) + list(np.linspace(2010, 2100, 50))
+    df = pd.DataFrame({'close_cy': cy, 'close_hl': hl})
+    signals_no_tf = generate_signals(df, window=3, apply_cooldown=False, apply_trend_filter=False)
+    signals_tf = generate_signals(df, window=3, apply_cooldown=False, apply_trend_filter=True)
+    # 两者都应该是 1（CY 更强且长期趋势向上）
+    assert signals_no_tf.iloc[-1] == 1.0
+    assert signals_tf.iloc[-1] == 1.0
+
+
+def test_trend_filter_nan_during_warmup():
+    """趋势窗口数据不足时，信号保持 NaN（不把无数据当看空）"""
+    from strategy import generate_signals
+    # 只有 10 天数据，趋势窗口 20 天不足
+    df = pd.DataFrame({
+        'close_cy': [100.0] * 10,
+        'close_hl': [100.0] * 10,
+    })
+    signals = generate_signals(df, window=3, apply_cooldown=False, apply_trend_filter=True, trend_filter_windows=[20])
+    # 所有信号都应该是 NaN（趋势数据不足）
+    assert signals.isna().all()
+
+
+def test_trend_filter_blocks_hl_when_hl_trend_negative():
+    """红利持仓：红利长周期趋势为负时，强制空仓"""
+    from strategy import generate_signals
+    # HL 长期下跌 200 天，CY 更惨 → HL 相对更强
+    # 但 HL 长周期趋势仍为负 → 趋势过滤应阻止 HL 持仓
+    n = 250
+    cy_decline = list(np.linspace(3000, 1500, 200))
+    cy_rebound = list(np.linspace(1510, 1580, 50))
+    cy = cy_decline + cy_rebound
+    hl_decline = list(np.linspace(2500, 1700, 200))
+    hl_rebound = list(np.linspace(1720, 1900, 50))
+    hl = hl_decline + hl_rebound
+    df = pd.DataFrame({'close_cy': cy, 'close_hl': hl})
+    # 不启用趋势过滤：HL 更强 → 信号 -1
+    signals_no_tf = generate_signals(df, window=3, apply_cooldown=False, apply_trend_filter=False)
+    assert signals_no_tf.iloc[-1] == -1.0
+    # 启用趋势过滤：HL 长周期趋势为负 → 信号应为 0
+    signals_tf = generate_signals(df, window=3, apply_cooldown=False, apply_trend_filter=True)
+    assert signals_tf.iloc[-1] == 0.0
+
+
+def test_trend_filter_default_off():
+    """默认不启用趋势过滤（保持向后兼容，A/B 验证前不影响现有行为）"""
+    from strategy import generate_signals
+    n = 250
+    cy = list(np.linspace(3000, 1800, 200)) + list(np.linspace(1820, 2200, 50))
+    hl = list(np.linspace(2500, 1600, 200)) + list(np.linspace(1610, 1700, 50))
+    df = pd.DataFrame({'close_cy': cy, 'close_hl': hl})
+    # 不传 apply_trend_filter 时，应与 apply_trend_filter=False 一致
+    signals_default = generate_signals(df, window=3, apply_cooldown=False)
+    signals_off = generate_signals(df, window=3, apply_cooldown=False, apply_trend_filter=False)
+    pd.testing.assert_series_equal(signals_default, signals_off)
+
+
 # ===== calculate_ratio_percentile 测试 =====
 
 def test_ratio_percentile_basic():

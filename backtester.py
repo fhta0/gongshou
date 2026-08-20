@@ -13,7 +13,9 @@ def run_backtest(
     df: pd.DataFrame,
     window: int = None,
     transaction_cost: float = 0.001,  # 单边 0.1%（含佣金+印花税+滑点）
-    strategy_type: str = 'momentum'  # 'momentum' 或 'combined'
+    strategy_type: str = 'momentum',  # 'momentum' 或 'combined'
+    apply_trend_filter: bool = False,
+    trend_filter_windows: list = None
 ) -> pd.DataFrame:
     """
     运行回测
@@ -22,6 +24,8 @@ def run_backtest(
         window: 动量窗口（默认使用配置值）
         transaction_cost: 单边交易成本，默认 0.1%
         strategy_type: 'momentum'（纯动量）或 'combined'（组合策略）
+        apply_trend_filter: 是否应用长周期趋势过滤（默认 False）
+        trend_filter_windows: 趋势过滤窗口列表（默认取 config 值）
     Returns:
         包含信号、持仓、净值的 DataFrame
     """
@@ -48,9 +52,17 @@ def run_backtest(
 
     # 1. 生成信号（T日）
     if strategy_type == 'combined':
-        result['signal'] = generate_combined_signals(result, window)
+        result['signal'] = generate_combined_signals(
+            result, window,
+            apply_trend_filter=apply_trend_filter,
+            trend_filter_windows=trend_filter_windows
+        )
     else:
-        result['signal'] = generate_signals(result, window)
+        result['signal'] = generate_signals(
+            result, window,
+            apply_trend_filter=apply_trend_filter,
+            trend_filter_windows=trend_filter_windows
+        )
 
     # 1b. 信号强度 + 动量百分位列
     # spec: 低位买cy=强信号, 高位买hl=强信号, 高位买cy需动量百分位验证
