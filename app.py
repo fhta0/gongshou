@@ -216,6 +216,8 @@ def render_realtime_card(merged_data: pd.DataFrame):
 
     pct_window = STRATEGY_CONFIG['percentile_window']
     ratio_pct_series = calculate_ratio_percentile(merged_data['ratio'], pct_window)
+    # 注：比值百分位用历史收盘价（不纳入盘中实时修正），组合策略已降级，
+    # 此处仅影响信号强度标签展示，不影响交易信号（交易信号仅依赖动量百分位）
     ratio_pct_today = ratio_pct_series.iloc[-1] if not pd.isna(ratio_pct_series.iloc[-1]) else None
 
     # 信号强度（spec: 低位买cy=强信号, 高位买hl=强信号, 高位买cy需动量百分位验证）
