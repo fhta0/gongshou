@@ -23,6 +23,13 @@ st.set_page_config(
     layout="wide"
 )
 
+# 强制覆盖浏览器标题（确保不显示 Streamlit 字样）
+st.markdown("""
+<script>
+    document.title = "双动量信号系统";
+</script>
+""", unsafe_allow_html=True)
+
 
 # ===== 样式注入 =====
 
