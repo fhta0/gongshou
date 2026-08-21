@@ -2,8 +2,6 @@
 创业板/中证红利双动量信号系统 - Streamlit 主入口
 策略：比较两指数的N天动量，选择更强的一方；若均为负则空仓。
 """
-import json
-import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -26,29 +24,21 @@ st.set_page_config(
 )
 
 
-# ===== 冷却状态持久化 =====
+# ===== 冷却状态持久化（内存版，兼容 Streamlit Cloud） =====
+
+# 全局变量：上次切换日期（进程级别，重启后重置）
+_last_switch_date = None
+
 
 def _load_cooldown_state():
-    """从本地文件加载上次切换日期"""
-    try:
-        path = os.path.join(os.path.dirname(__file__), '.last_switch.json')
-        if os.path.exists(path):
-            with open(path, 'r') as f:
-                data = json.load(f)
-            return pd.Timestamp(data.get('last_switch_date', ''))
-    except Exception:
-        pass
-    return None
+    """从内存加载上次切换日期（Streamlit Cloud 不支持文件持久化）"""
+    return _last_switch_date
 
 
 def _save_cooldown_state(date):
-    """保存上次切换日期到本地文件"""
-    try:
-        path = os.path.join(os.path.dirname(__file__), '.last_switch.json')
-        with open(path, 'w') as f:
-            json.dump({'last_switch_date': str(date)}, f)
-    except Exception:
-        pass
+    """保存上次切换日期到内存"""
+    global _last_switch_date
+    _last_switch_date = date
 
 
 def is_trading_hours() -> bool:

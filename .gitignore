@@ -5,3 +5,4 @@ __pycache__/
 .env
 .venv/
 .last_switch.json
+.streamlit/secrets.toml
