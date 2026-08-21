@@ -24,6 +24,157 @@ st.set_page_config(
 )
 
 
+# ===== 样式注入 =====
+
+def _inject_css():
+    """注入自定义 CSS，统一视觉风格"""
+    st.markdown("""
+    <style>
+    /* 全局字体与背景 */
+    .stApp {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    /* 页面头部标题区 */
+    .hero-header {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+        padding: 2rem 2.5rem;
+        border-radius: 12px;
+        margin-bottom: 1.5rem;
+        color: white;
+    }
+    .hero-header h1 {
+        margin: 0 0 0.3rem 0;
+        font-size: 1.8rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+    }
+    .hero-header .subtitle {
+        font-size: 0.95rem;
+        opacity: 0.8;
+        font-weight: 400;
+    }
+
+    /* 信号卡片 */
+    .signal-card {
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin-bottom: 1rem;
+        border-left: 5px solid;
+        background: white;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    .signal-card.cy {
+        border-left-color: #1f77b4;
+        background: linear-gradient(90deg, #eef5fc 0%, white 30%);
+    }
+    .signal-card.hl {
+        border-left-color: #ff7f0e;
+        background: linear-gradient(90deg, #fff4eb 0%, white 30%);
+    }
+    .signal-card.cash {
+        border-left-color: #999999;
+        background: linear-gradient(90deg, #f5f5f5 0%, white 30%);
+    }
+    .signal-card .signal-title {
+        font-size: 1.3rem;
+        font-weight: 700;
+        margin: 0 0 0.4rem 0;
+    }
+    .signal-card .signal-desc {
+        font-size: 0.9rem;
+        color: #555;
+        margin: 0;
+        line-height: 1.5;
+    }
+
+    /* 指标分组容器 */
+    .metric-group {
+        background: white;
+        padding: 1.2rem 1.5rem;
+        border-radius: 10px;
+        margin-bottom: 1rem;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    }
+    .metric-group-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #888;
+        margin-bottom: 0.8rem;
+    }
+
+    /* 章节标题 */
+    .section-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #1a1a2e;
+        margin: 1.5rem 0 0.8rem 0;
+        padding-bottom: 0.4rem;
+        border-bottom: 2px solid #f0f2f6;
+    }
+
+    /* 信号强度标签 */
+    .strength-badge {
+        display: inline-block;
+        padding: 0.3rem 0.8rem;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+    .strength-badge.strong {
+        background: #fef3c7;
+        color: #92400e;
+    }
+    .strength-badge.normal {
+        background: #dbeafe;
+        color: #1e40af;
+    }
+    .strength-badge.empty {
+        background: #f3f4f6;
+        color: #6b7280;
+    }
+
+    /* 隐藏 Streamlit 默认 footer */
+    footer { visibility: hidden; }
+    .stApp footer::after {
+        visibility: visible;
+        content: '仅供研究参考，不构成投资建议';
+        display: block;
+        text-align: center;
+        padding: 1rem;
+        font-size: 0.75rem;
+        color: #999;
+    }
+
+    /* Tab 样式 */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0.5rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        padding: 0.6rem 1.2rem;
+        border-radius: 8px 8px 0 0;
+    }
+
+    /* Metric 数值颜色 */
+    [data-testid="stMetricValue"] {
+        font-weight: 600;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+def _render_hero_header(last_update: str):
+    """渲染页面顶部 hero 区域"""
+    st.markdown(f"""
+    <div class="hero-header">
+        <h1>📊 双动量信号系统</h1>
+        <div class="subtitle">创业板 / 中证红利 · 动量轮动策略 · 数据截至 {last_update}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 # ===== 冷却状态持久化（内存版，兼容 Streamlit Cloud） =====
 
 # 全局变量：上次切换日期（进程级别，重启后重置）
@@ -52,7 +203,7 @@ def is_trading_hours() -> bool:
 
 
 def main():
-    st.title("📊 创业板/中证红利 双动量信号系统")
+    _inject_css()
 
     with st.spinner("加载历史数据..."):
         merged_data = load_merged_data()
@@ -63,7 +214,7 @@ def main():
 
     st.session_state['merged_data'] = merged_data
     last_update = merged_data['date'].iloc[-1].strftime('%Y-%m-%d')
-    st.caption(f"历史数据截至: {last_update}")
+    _render_hero_header(last_update)
 
     if is_trading_hours():
         st_autorefresh(interval=5 * 60 * 1000, key="realtime_refresh")
@@ -79,9 +230,9 @@ def main():
 
 def render_signal_tab(merged_data: pd.DataFrame):
     render_realtime_card(merged_data)
-    st.subheader("比值走势与动量")
+    st.markdown('<div class="section-title">📈 比值走势与动量</div>', unsafe_allow_html=True)
     render_ratio_chart(merged_data)
-    st.subheader("指数对比")
+    st.markdown('<div class="section-title">📉 指数对比</div>', unsafe_allow_html=True)
     render_index_comparison(merged_data)
 
 
@@ -231,6 +382,8 @@ def render_realtime_card(merged_data: pd.DataFrame):
         signal_strength = "数据不足"
 
     # 指标卡片
+    st.markdown('<div class="metric-group">', unsafe_allow_html=True)
+    st.markdown('<div class="metric-group-title">核心动量指标</div>', unsafe_allow_html=True)
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(
@@ -260,9 +413,11 @@ def render_realtime_card(merged_data: pd.DataFrame):
         with detail_cols[idx]:
             if cy_w is not None:
                 st.caption(f"**{w}天**: 创业板 {cy_w:+.2%} | 红利 {hl_w:+.2%}")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # 百分位指标
-    st.caption("📈 历史百分位（越高=越强/越贵）")
+    st.markdown('<div class="metric-group">', unsafe_allow_html=True)
+    st.markdown('<div class="metric-group-title">📈 历史百分位（越高=越强/越贵）</div>', unsafe_allow_html=True)
     pct1, pct2, pct3 = st.columns(3)
     with pct1:
         st.metric(
@@ -282,24 +437,33 @@ def render_realtime_card(merged_data: pd.DataFrame):
             f"{ratio_pct_today:.0%}" if ratio_pct_today is not None else "N/A",
             help=f"创业板/红利比值在过去 {pct_window} 天中的位置"
         )
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # 信号强度 + 波动率仓位
     scale_col, info_col = st.columns([2, 1])
     with scale_col:
-        st.caption(f"信号强度：{signal_strength}")
+        # 信号强度徽章
+        if '强信号' in signal_strength:
+            badge_cls = 'strong'
+        elif '空仓' in signal_strength or '数据不足' in signal_strength:
+            badge_cls = 'empty'
+        else:
+            badge_cls = 'normal'
+        st.markdown(f'<span class="strength-badge {badge_cls}">{signal_strength}</span>', unsafe_allow_html=True)
     with info_col:
         if new_state != 'cash':
             st.caption(f"波动率仓位：**{vol_scale:.0%}**（目标 {target_vol:.0%} / 实现波动率）")
         elif decay_exit_triggered:
-            st.caption("衰减退出已触发")
+            st.caption("⚠️ 衰减退出已触发")
 
-    # 信号描述
-    if display['color'] == 'blue':
-        st.success(f"**{display['description']}**\n\n操作建议：{display['action']}")
-    elif display['color'] == 'orange':
-        st.info(f"**{display['description']}**\n\n操作建议：{display['action']}")
-    else:
-        st.warning(f"**{display['description']}**\n\n操作建议：{display['action']}")
+    # 信号卡片
+    card_cls = 'cy' if new_state == 'cy' else ('hl' if new_state == 'hl' else 'cash')
+    st.markdown(f"""
+    <div class="signal-card {card_cls}">
+        <div class="signal-title">{display['emoji']} {display['signal']}</div>
+        <p class="signal-desc">{display['description']}<br><strong>操作建议：</strong>{display['action']}</p>
+    </div>
+    """, unsafe_allow_html=True)
 
     # 策略说明
     with st.expander("📖 策略说明"):
@@ -425,8 +589,23 @@ def render_ratio_chart(merged_data: pd.DataFrame):
     fig.update_yaxes(title_text="比值", row=1, col=1)
     fig.update_yaxes(title_text="动量", row=2, col=1)
     fig.update_yaxes(title_text="百分位", range=[0, 1], row=3, col=1)
-    fig.update_layout(height=700, hovermode='x unified',
-                      legend=dict(orientation='h', y=1.05))
+
+    # 统一样式
+    fig.update_layout(
+        height=700,
+        hovermode='x unified',
+        legend=dict(orientation='h', y=1.06, x=0.5, xanchor='center',
+                    font=dict(size=11)),
+        plot_bgcolor='rgba(250,250,250,0.8)',
+        paper_bgcolor='white',
+        margin=dict(l=60, r=30, t=50, b=40),
+        font=dict(family="-apple-system, BlinkMacSystemFont, sans-serif"),
+    )
+    # 网格线
+    for row_i in range(1, 4):
+        fig.update_xaxes(gridcolor='rgba(0,0,0,0.05)', gridwidth=1, row=row_i, col=1)
+        fig.update_yaxes(gridcolor='rgba(0,0,0,0.05)', gridwidth=1, row=row_i, col=1)
+
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -449,12 +628,20 @@ def render_index_comparison(merged_data: pd.DataFrame):
     fig.update_xaxes(title_text="日期")
     fig.update_yaxes(title_text=STRATEGY_CONFIG['symbol_a']['name'], secondary_y=False)
     fig.update_yaxes(title_text=STRATEGY_CONFIG['symbol_b']['name'], secondary_y=True)
-    fig.update_layout(height=400, hovermode='x unified')
+    fig.update_layout(
+        height=400,
+        hovermode='x unified',
+        plot_bgcolor='rgba(250,250,250,0.8)',
+        paper_bgcolor='white',
+        margin=dict(l=60, r=60, t=30, b=40),
+        font=dict(family="-apple-system, BlinkMacSystemFont, sans-serif"),
+        legend=dict(orientation='h', y=1.08, x=0.5, xanchor='center'),
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 
 def render_backtest_tab(merged_data: pd.DataFrame):
-    st.subheader("历史回测")
+    st.markdown('<div class="section-title">📊 回测配置</div>', unsafe_allow_html=True)
     with st.form("backtest_form"):
         strategy_choice = st.selectbox(
             "选择策略",
@@ -574,7 +761,12 @@ def render_nav_chart(backtest_result: pd.DataFrame):
     ))
     fig.update_layout(
         xaxis_title="日期", yaxis_title="净值",
-        hovermode='x unified', height=400
+        hovermode='x unified', height=400,
+        plot_bgcolor='rgba(250,250,250,0.8)',
+        paper_bgcolor='white',
+        margin=dict(l=60, r=30, t=30, b=40),
+        font=dict(family="-apple-system, BlinkMacSystemFont, sans-serif"),
+        legend=dict(orientation='h', y=1.1, x=0.5, xanchor='center'),
     )
     fig.update_traces(connectgaps=True)
     st.plotly_chart(fig, use_container_width=True)
@@ -603,7 +795,12 @@ def render_comparison_nav_chart(result_a: pd.DataFrame, result_b: pd.DataFrame,
     ))
     fig.update_layout(
         xaxis_title="日期", yaxis_title="净值",
-        hovermode='x unified', height=450
+        hovermode='x unified', height=450,
+        plot_bgcolor='rgba(250,250,250,0.8)',
+        paper_bgcolor='white',
+        margin=dict(l=60, r=30, t=30, b=40),
+        font=dict(family="-apple-system, BlinkMacSystemFont, sans-serif"),
+        legend=dict(orientation='h', y=1.1, x=0.5, xanchor='center'),
     )
     fig.update_traces(connectgaps=True)
     st.plotly_chart(fig, use_container_width=True)
