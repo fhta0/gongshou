@@ -35,6 +35,14 @@ def _inject_css():
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }
 
+    /* 隐藏 header 后消除顶部空白 */
+    .stApp[data-testid="stAppViewContainer"] {
+        padding-top: 0;
+    }
+    .stApp[data-testid="stAppViewContainer"] > .main {
+        padding-top: 1rem;
+    }
+
     /* 页面头部标题区 */
     .hero-header {
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
@@ -136,8 +144,20 @@ def _inject_css():
         color: #6b7280;
     }
 
+    /* 隐藏 Streamlit 顶部工具栏（汉堡菜单、Deploy 按钮等） */
+    header[data-testid="stHeader"] {
+        display: none;
+    }
+
+    /* 隐藏 "Made with Streamlit" 底部横幅 */
+    .stDeployButton,
+    [data-testid="stToolbar"],
+    [data-testid="stToolbarContent"] {
+        display: none !important;
+    }
+
     /* 隐藏 Streamlit 默认 footer */
-    footer { visibility: hidden; }
+    footer { visibility: hidden; height: 0; }
     .stApp footer::after {
         visibility: visible;
         content: '仅供研究参考，不构成投资建议';
