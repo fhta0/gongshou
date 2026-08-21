@@ -85,7 +85,7 @@ def test_generate_signals_cy_stronger():
         'close_cy': [100] * 20 + [120],
         'close_hl': [100] * 20 + [105],
     })
-    signals = generate_signals(df, window=20)
+    signals = generate_signals(df, window=20, apply_cooldown=False)
     assert signals.iloc[-1] == 1.0
 
 
@@ -95,7 +95,7 @@ def test_generate_signals_hl_stronger():
         'close_cy': [100] * 20 + [105],
         'close_hl': [100] * 20 + [120],
     })
-    signals = generate_signals(df, window=20)
+    signals = generate_signals(df, window=20, apply_cooldown=False)
     assert signals.iloc[-1] == -1.0
 
 
@@ -228,7 +228,7 @@ def test_realtime_cooldown_blocks_switch():
     assert state2 == 'cy'  # 保持 cy，不切换
 
     # 冷却期外：允许切换
-    _, state3, _ = calculate_signal(0.02, 0.05, 'cy', days_since_last_switch=10)
+    _, state3, _ = calculate_signal(0.02, 0.05, 'cy', days_since_last_switch=15)
     assert state3 == 'hl'  # 切换为 hl
 
 
