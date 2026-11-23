@@ -65,7 +65,8 @@ def load_historical_cy() -> pd.DataFrame:
         result = df[['date', 'close']].copy()
         result['date'] = pd.to_datetime(result['date'])
         return result
-    except Exception:
+    except Exception as e:
+        st.error(f"加载创业板数据失败: {e}")
         return pd.DataFrame(columns=['date', 'close'])
 
 
@@ -91,7 +92,8 @@ def load_historical_hl() -> pd.DataFrame:
         # 价格指数 → 近似全收益：叠加股息再投资（H20922 数据源不可用，见 spec §2.1）
         result['close'] = _apply_dividend_adjustment(result['close'])
         return result
-    except Exception:
+    except Exception as e:
+        st.error(f"加载红利数据失败: {e}")
         return pd.DataFrame(columns=['date', 'close'])
 
 
