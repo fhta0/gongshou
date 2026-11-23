@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 from config import STRATEGY_CONFIG
-from strategy import generate_signals, generate_combined_signals, calculate_ratio_percentile, calculate_momentum_percentile, calculate_smoothed_momentum
+from strategy import generate_signals, calculate_ratio_percentile, calculate_momentum_percentile, calculate_smoothed_momentum
 
 
 @st.cache_data
@@ -14,7 +14,6 @@ def run_backtest(
     df: pd.DataFrame,
     window: int = None,
     transaction_cost: float = 0.001,  # 单边 0.1%（含佣金+印花税+滑点）
-    strategy_type: str = 'momentum',  # 'momentum' 或 'combined'
     apply_trend_filter: bool = False,
     trend_filter_windows: list = None,
     apply_decay_exit: bool = False,
@@ -26,10 +25,9 @@ def run_backtest(
     """
     运行回测
     Args:
-        df: 包含 date, close_cy, close_hl 的 DataFrame（组合策略还需 ratio 列）
+        df: 包含 date, close_cy, close_hl 的 DataFrame
         window: 动量窗口（默认使用配置值）
         transaction_cost: 单边交易成本，默认 0.1%
-        strategy_type: 'momentum'（纯动量）或 'combined'（组合策略）
         apply_trend_filter: 是否应用长周期趋势过滤（默认 False）
         trend_filter_windows: 趋势过滤窗口列表（默认取 config 值）
         apply_decay_exit: 是否应用动量衰竭退出（默认 False）
@@ -62,22 +60,13 @@ def run_backtest(
     )
 
     # 1. 生成信号（T日）
-    if strategy_type == 'combined':
-        result['signal'] = generate_combined_signals(
-            result, window,
-            apply_trend_filter=apply_trend_filter,
-            trend_filter_windows=trend_filter_windows,
-            apply_decay_exit=apply_decay_exit,
-            decay_exit_threshold=decay_exit_threshold
-        )
-    else:
-        result['signal'] = generate_signals(
-            result, window,
-            apply_trend_filter=apply_trend_filter,
-            trend_filter_windows=trend_filter_windows,
-            apply_decay_exit=apply_decay_exit,
-            decay_exit_threshold=decay_exit_threshold
-        )
+    result['signal'] = generate_signals(
+        result, window,
+        apply_trend_filter=apply_trend_filter,
+        trend_filter_windows=trend_filter_windows,
+        apply_decay_exit=apply_decay_exit,
+        decay_exit_threshold=decay_exit_threshold
+    )
 
     # 1b. 信号强度 + 动量百分位列
     # spec: 低位买cy=强信号, 高位买hl=强信号, 高位买cy需动量百分位验证
@@ -86,7 +75,6 @@ def run_backtest(
 
     low_pct = STRATEGY_CONFIG['low_percentile']
     high_pct = STRATEGY_CONFIG['high_percentile']
-    high_cy_mom_threshold = STRATEGY_CONFIG['high_cy_mom_pct_threshold']
 
     signal_strength = pd.Series('空仓', index=result.index)
     signal_strength[result['signal'] == 1] = '普通'
@@ -98,11 +86,6 @@ def run_backtest(
     # 高位买红利 → 强信号
     signal_strength[
         (result['ratio_percentile'] >= high_pct) & (result['signal'] == -1)
-    ] = '强信号'
-    # 高位买创业板 + 动量百分位 > 阈值 → 强信号
-    signal_strength[
-        (result['ratio_percentile'] >= high_pct) & (result['signal'] == 1)
-        & (cy_mom_pct > high_cy_mom_threshold)
     ] = '强信号'
     result['signal_strength'] = signal_strength
 

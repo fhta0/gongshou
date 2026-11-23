@@ -61,7 +61,7 @@ def load_historical_cy() -> pd.DataFrame:
         DataFrame with columns: ['date', 'close']
     """
     try:
-        df = ak.stock_zh_index_daily(symbol='sz399006')
+        df = ak.index_zh_daily_sina(symbol='sz399006')
         result = df[['date', 'close']].copy()
         result['date'] = pd.to_datetime(result['date'])
         return result
@@ -79,7 +79,7 @@ def load_historical_hl() -> pd.DataFrame:
     try:
         symbol = STRATEGY_CONFIG['symbol_b']['code']
         # CSIndex 接口需要较长的日期范围
-        df = ak.stock_zh_index_hist_csindex(
+        df = ak.index_hist_csindex(
             symbol=symbol,
             start_date='20150101',
             end_date=pd.Timestamp.now().strftime('%Y%m%d')

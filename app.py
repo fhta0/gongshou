@@ -388,19 +388,14 @@ def render_realtime_card(merged_data: pd.DataFrame):
     # 此处仅影响信号强度标签展示，不影响交易信号（交易信号仅依赖动量百分位）
     ratio_pct_today = ratio_pct_series.iloc[-1] if not pd.isna(ratio_pct_series.iloc[-1]) else None
 
-    # 信号强度（spec: 低位买cy=强信号, 高位买hl=强信号, 高位买cy需动量百分位验证）
+    # 信号强度（低位买cy=强信号, 高位买hl=强信号）
     if ratio_pct_today is not None:
         low_pct = STRATEGY_CONFIG['low_percentile']
         high_pct = STRATEGY_CONFIG['high_percentile']
-        high_cy_mom_threshold = STRATEGY_CONFIG['high_cy_mom_pct_threshold']
         if new_state == 'cy' and ratio_pct_today <= low_pct:
             signal_strength = "🔥 强信号（低位买创业板）"
         elif new_state == 'hl' and ratio_pct_today >= high_pct:
             signal_strength = "🔥 强信号（高位买红利）"
-        elif (new_state == 'cy' and ratio_pct_today >= high_pct
-              and cy_mom_pct_today is not None
-              and cy_mom_pct_today > high_cy_mom_threshold):
-            signal_strength = "🔥 强信号（高位动量验证）"
         elif new_state != 'cash':
             signal_strength = "📊 普通信号"
         else:
@@ -670,12 +665,8 @@ def render_index_comparison(merged_data: pd.DataFrame):
 def render_backtest_tab(merged_data: pd.DataFrame):
     st.markdown('<div class="section-title">📊 回测配置</div>', unsafe_allow_html=True)
     with st.form("backtest_form"):
-        strategy_choice = st.selectbox(
-            "选择策略",
-            ["纯动量策略", "组合策略（比值位置+动量百分位）"],
-            index=0
-        )
-        compare = st.checkbox("对比两种策略", value=False)
+        st.markdown("**当前策略**：纯动量策略（多窗口平滑 + 冷却期 + 动量衰竭退出）")
+        compare = st.checkbox("显示详细对比", value=False, help="显示与历史基准的对比")
         st.markdown("**风控机制**（默认启用，与实时信号对齐）")
         col_a, col_b = st.columns(2)
         with col_a:
@@ -688,40 +679,15 @@ def render_backtest_tab(merged_data: pd.DataFrame):
         submitted = st.form_submit_button("🚀 开始回测")
 
     if submitted:
-        strategy_type = 'combined' if '组合' in strategy_choice else 'momentum'
-
-        with st.spinner(f"正在计算回测（{strategy_choice}）..."):
-            backtest_result = run_backtest(merged_data, strategy_type=strategy_type,
+        with st.spinner("正在计算回测..."):
+            backtest_result = run_backtest(merged_data,
                 apply_decay_exit=use_decay_exit, apply_vol_target=use_vol_target)
             stats = calculate_statistics(backtest_result)
 
-        compare_result = None
-        compare_stats = None
-        if compare:
-            other_type = 'momentum' if strategy_type == 'combined' else 'combined'
-            compare_result = run_backtest(merged_data, strategy_type=other_type,
-                apply_decay_exit=use_decay_exit, apply_vol_target=use_vol_target)
-            compare_stats = calculate_statistics(compare_result)
-
-        if compare and compare_result is not None:
-            # 对比模式
-            other_name = '纯动量' if strategy_type == 'combined' else '组合策略'
-            col_l, col_r = st.columns(2)
-            with col_l:
-                st.markdown(f"**📊 {strategy_choice}**")
-                _render_backtest_metrics(stats)
-            with col_r:
-                st.markdown(f"**📊 {other_name}**")
-                _render_backtest_metrics(compare_stats)
-            st.subheader("策略累计收益曲线对比")
-            render_comparison_nav_chart(backtest_result, compare_result,
-                                        strategy_choice, other_name)
-        else:
-            # 单策略模式
-            _render_backtest_metrics(stats)
-            _render_position_distribution(backtest_result)
-            st.subheader("策略累计收益曲线")
-            render_nav_chart(backtest_result)
+        _render_backtest_metrics(stats)
+        _render_position_distribution(backtest_result)
+        st.subheader("策略累计收益曲线")
+        render_nav_chart(backtest_result)
 
         st.subheader("信号切换记录")
         render_signal_table(backtest_result)
@@ -789,40 +755,6 @@ def render_nav_chart(backtest_result: pd.DataFrame):
     fig.update_layout(
         xaxis_title="日期", yaxis_title="净值",
         hovermode='x unified', height=400,
-        plot_bgcolor='rgba(250,250,250,0.8)',
-        paper_bgcolor='white',
-        margin=dict(l=60, r=30, t=30, b=40),
-        font=dict(family="-apple-system, BlinkMacSystemFont, sans-serif"),
-        legend=dict(orientation='h', y=1.1, x=0.5, xanchor='center'),
-    )
-    fig.update_traces(connectgaps=True)
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_comparison_nav_chart(result_a: pd.DataFrame, result_b: pd.DataFrame,
-                                name_a: str, name_b: str):
-    """对比模式下叠加显示两条策略净值曲线"""
-    import plotly.graph_objects as go
-    fig = go.Figure()
-    fig.add_trace(go.Scattergl(
-        x=result_a['date'], y=result_a['strategy_nav'],
-        mode='lines', name=name_a, line=dict(color='purple', width=2)
-    ))
-    fig.add_trace(go.Scattergl(
-        x=result_b['date'], y=result_b['strategy_nav'],
-        mode='lines', name=name_b, line=dict(color='teal', width=2)
-    ))
-    fig.add_trace(go.Scattergl(
-        x=result_a['date'], y=result_a['cy_nav'],
-        mode='lines', name='创业板基准', line=dict(color='blue', dash='dash', width=1)
-    ))
-    fig.add_trace(go.Scattergl(
-        x=result_a['date'], y=result_a['hl_nav'],
-        mode='lines', name='红利基准', line=dict(color='orange', dash='dash', width=1)
-    ))
-    fig.update_layout(
-        xaxis_title="日期", yaxis_title="净值",
-        hovermode='x unified', height=450,
         plot_bgcolor='rgba(250,250,250,0.8)',
         paper_bgcolor='white',
         margin=dict(l=60, r=30, t=30, b=40),

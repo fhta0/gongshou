@@ -21,17 +21,11 @@ STRATEGY_CONFIG = {
     "dividend_yield": 0.035,         # 中证红利历史股息率（ETF 510880 实测分红 2016-2026 均值 ~3.5%，原 4.5% 偏高）
     "cooldown_days": 12,             # 信号冷却期（防频繁切换；敏感性测试：5→12 天 sharpe 0.41→0.71，DD 23.71%→17.48%）
 
-    # 组合策略参数（比值位置 + 动量百分位）
+    # 动量百分位参数（用于信号强度展示和动量衰竭退出）
     "percentile_window": 750,            # 比值百分位滚动窗口（3年交易日）
     "momentum_percentile_window": 250,   # 动量百分位滚动窗口（1年）
-    "low_percentile": 0.20,              # 低位阈值（比值≤20%分位）
-    "high_percentile": 0.80,             # 高位阈值（比值≥80%分位）
-    # 动量百分位门槛（按比值区域）
-    "low_cy_mom_pct_threshold": 0.30,    # 低位时创业板动量百分位门槛
-    "mid_mom_pct_threshold": 0.50,       # 中间时动量百分位门槛
-    "high_cy_mom_pct_threshold": 0.70,   # 高位时创业板动量百分位门槛
-    "low_hl_mom_pct_threshold": 0.50,    # 低位时红利动量百分位门槛
-    "high_hl_mom_pct_threshold": 0.30,   # 高位时红利动量百分位门槛
+    "low_percentile": 0.20,              # 低位阈值（比值≤20%分位，用于信号强度标签）
+    "high_percentile": 0.80,             # 高位阈值（比值≥80%分位，用于信号强度标签）
     "decay_exit_threshold": 0.20,        # 动量衰竭退出阈值（动量百分位低于此值退出）
 
     # 波动率目标仓位
