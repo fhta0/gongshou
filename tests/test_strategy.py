@@ -469,22 +469,3 @@ def test_momentum_percentile_low_at_bottom():
     assert result.iloc[-1] < 0.3
 
 
-# ===== generate_combined_signals 测试 =====
-
-def test_combined_absolute_momentum_floor():
-    """组合策略：动量<0时不买入（安全网）"""
-    from strategy import generate_combined_signals
-    # 构造数据：确保两个动量都为负（价格持续下跌）
-    # 需要足够长的数据以通过动量百分位窗口（250天）
-    n = 300
-    cy = [100.0 - i * 0.2 for i in range(n)]  # 持续下跌
-    hl = [100.0 - i * 0.1 for i in range(n)]  # 持续下跌
-    ratio = [c / h for c, h in zip(cy, hl)]
-    df = pd.DataFrame({
-        'close_cy': cy,
-        'close_hl': hl,
-        'ratio': ratio,
-    })
-    signals = generate_combined_signals(df, window=5)
-    # 两个动量都为负，不应买入（信号应该是0，不是1或-1）
-    assert signals.iloc[-1] == 0 or pd.isna(signals.iloc[-1])

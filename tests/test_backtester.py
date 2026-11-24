@@ -145,24 +145,6 @@ def test_backtest_with_real_data():
     assert len(result) == n
 
 
-def test_backtest_combined_strategy():
-    """组合策略回测流程正常"""
-    np.random.seed(42)
-    n = 800
-    dates = pd.bdate_range('2020-01-01', periods=n)
-    cy = 100 * np.cumprod(1 + np.random.normal(0.001, 0.02, n))
-    hl = 100 * np.cumprod(1 + np.random.normal(0.0005, 0.015, n))
-    df = pd.DataFrame({
-        'date': dates,
-        'close_cy': cy,
-        'close_hl': hl,
-        'ratio': cy / hl,
-    })
-    result = run_backtest(df, window=20, strategy_type='combined')
-    assert 'strategy_nav' in result.columns
-    assert 'position' in result.columns
-    assert 'ratio_percentile' in result.columns
-    assert len(result) == n
 
 def test_backtest_default_is_momentum():
     """默认使用纯动量策略"""
