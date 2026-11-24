@@ -121,6 +121,38 @@ def _apply_momentum_decay_exit(
     return result
 
 
+def apply_pe_filter(
+    signals: pd.Series,
+    cy_pe_pct: pd.Series,
+    hl_pe_pct: pd.Series,
+    threshold: float = None
+) -> pd.Series:
+    """
+    估值过滤：当推荐买入的指数 PE 百分位超过阈值时，改为空仓。
+
+    Args:
+        signals: 原始信号序列（1=CY, -1=HL, 0=空仓）
+        cy_pe_pct: 创业板 PE 百分位
+        hl_pe_pct: 红利 PE 百分位
+        threshold: 高估阈值，默认取 config 值
+
+    Returns:
+        过滤后的信号序列
+    """
+    if threshold is None:
+        threshold = STRATEGY_CONFIG.get('pe_percentile_threshold', 0.80)
+
+    result = signals.copy()
+
+    # 买入创业板但创业板高估 → 空仓
+    result[(result == 1) & (cy_pe_pct > threshold)] = 0.0
+
+    # 买入红利但红利高估 → 空仓
+    result[(result == -1) & (hl_pe_pct > threshold)] = 0.0
+
+    return result
+
+
 def _apply_trend_filter(
     raw_signals: pd.Series,
     close_cy: pd.Series,
@@ -206,7 +238,11 @@ def generate_signals(
     apply_trend_filter: bool = False,
     trend_filter_windows: list = None,
     apply_decay_exit: bool = False,
-    decay_exit_threshold: float = None
+    decay_exit_threshold: float = None,
+    apply_pe_filter_flag: bool = False,
+    cy_pe_pct: pd.Series = None,
+    hl_pe_pct: pd.Series = None,
+    pe_threshold: float = None
 ) -> pd.Series:
     """
     向量化生成全量信号（用于回测）
@@ -218,6 +254,10 @@ def generate_signals(
         trend_filter_windows: 趋势过滤窗口列表（默认取 config 值）
         apply_decay_exit: 是否应用动量衰竭退出（默认 False）
         decay_exit_threshold: 衰竭退出阈值（默认取 config 值）
+        apply_pe_filter_flag: 是否应用估值过滤（默认 False）
+        cy_pe_pct: 创业板 PE 百分位序列（用于估值过滤）
+        hl_pe_pct: 红利 PE 百分位序列（用于估值过滤）
+        pe_threshold: 估值过滤阈值（默认取 config 值）
     Returns:
         信号序列：1=创业板, -1=红利, 0=空仓
     """
@@ -256,6 +296,10 @@ def generate_signals(
         hl_mom_pct = calculate_momentum_percentile(hl_mom, mom_pct_window)
         raw_signals = _apply_momentum_decay_exit(raw_signals, cy_mom_pct, hl_mom_pct, decay_exit_threshold)
 
+    # 估值过滤（最后应用）
+    if apply_pe_filter_flag and cy_pe_pct is not None and hl_pe_pct is not None:
+        raw_signals = apply_pe_filter(raw_signals, cy_pe_pct, hl_pe_pct, pe_threshold)
+
     return raw_signals
 
 
@@ -263,7 +307,11 @@ def calculate_signal(
     cy_momentum: float,
     hl_momentum: float,
     prev_state: str,
-    days_since_last_switch: int = 999
+    days_since_last_switch: int = 999,
+    cy_pe_pct: float = None,
+    hl_pe_pct: float = None,
+    apply_pe_filter_flag: bool = False,
+    pe_threshold: float = None
 ) -> Tuple[dict, str, Optional[dict]]:
     """
     实时信号计算（用于 UI 卡片）
@@ -275,6 +323,11 @@ def calculate_signal(
         hl_momentum: 红利当前动量（多窗口平滑动量）
         prev_state: 上一次状态 ('cy' / 'hl' / 'cash')
         days_since_last_switch: 距离上次切换的天数（用于冷却期判断）
+        cy_pe_pct: 创业板当前 PE 百分位（用于估值过滤）
+        hl_pe_pct: 红利当前 PE 百分位（用于估值过滤）
+        apply_pe_filter_flag: 是否应用估值过滤
+        pe_threshold: 估值过滤阈值
+
     Returns:
         (display_info, new_state, event_or_none)
     """
@@ -291,6 +344,16 @@ def calculate_signal(
         raw_state = 'hl'
     else:
         raw_state = 'cash'
+
+    # 估值过滤
+    if apply_pe_filter_flag and raw_state in ('cy', 'hl'):
+        if pe_threshold is None:
+            pe_threshold = STRATEGY_CONFIG.get('pe_percentile_threshold', 0.80)
+
+        if raw_state == 'cy' and cy_pe_pct is not None and cy_pe_pct > pe_threshold:
+            raw_state = 'cash'  # 创业板高估，改为空仓
+        elif raw_state == 'hl' and hl_pe_pct is not None and hl_pe_pct > pe_threshold:
+            raw_state = 'cash'  # 红利高估，改为空仓
 
     # 应用冷却期：如果在冷却期内且状态变化，则保持原状态
     if raw_state != prev_state and days_since_last_switch < cooldown_days:

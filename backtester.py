@@ -6,7 +6,8 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 from config import STRATEGY_CONFIG
-from strategy import generate_signals, calculate_ratio_percentile, calculate_momentum_percentile, calculate_smoothed_momentum
+from strategy import generate_signals, calculate_ratio_percentile, calculate_momentum_percentile, calculate_smoothed_momentum, apply_pe_filter
+from data_loader import load_pe_data_for_strategy
 
 
 @st.cache_data
@@ -20,7 +21,9 @@ def run_backtest(
     decay_exit_threshold: float = None,
     apply_vol_target: bool = False,
     target_vol: float = None,
-    vol_lookback: int = None
+    vol_lookback: int = None,
+    apply_pe_filter_flag: bool = False,
+    pe_threshold: float = None
 ) -> pd.DataFrame:
     """
     运行回测
@@ -59,13 +62,37 @@ def run_backtest(
         calculate_smoothed_momentum(result['close_hl']), mom_pct_window
     )
 
+    # 估值过滤：加载 PE 数据
+    cy_pe_pct = None
+    hl_pe_pct = None
+    if apply_pe_filter_flag:
+        pe_data = load_pe_data_for_strategy()
+        if not pe_data['cy'].empty and not pe_data['hl'].empty:
+            # 对齐 PE 数据到回测日期
+            cy_pe_df = pe_data['cy'][['date', 'pe_percentile']].copy()
+            hl_pe_df = pe_data['hl'][['date', 'pe_percentile']].copy()
+
+            # 合并到 result
+            result = pd.merge(result, cy_pe_df, on='date', how='left', suffixes=('', '_cy_pe'))
+            result = pd.merge(result, hl_pe_df, on='date', how='left', suffixes=('', '_hl_pe'))
+
+            cy_pe_pct = result['pe_percentile']
+            hl_pe_pct = result['pe_percentile_hl_pe']
+
+            # 清理列名
+            result = result.drop(columns=['pe_percentile', 'pe_percentile_hl_pe'], errors='ignore')
+
     # 1. 生成信号（T日）
     result['signal'] = generate_signals(
         result, window,
         apply_trend_filter=apply_trend_filter,
         trend_filter_windows=trend_filter_windows,
         apply_decay_exit=apply_decay_exit,
-        decay_exit_threshold=decay_exit_threshold
+        decay_exit_threshold=decay_exit_threshold,
+        apply_pe_filter_flag=apply_pe_filter_flag,
+        cy_pe_pct=cy_pe_pct,
+        hl_pe_pct=hl_pe_pct,
+        pe_threshold=pe_threshold
     )
 
     # 1b. 信号强度 + 动量百分位列

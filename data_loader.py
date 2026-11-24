@@ -133,3 +133,61 @@ def get_realtime_change(spot_code: str) -> float:
         return 0.0
     except Exception:
         return 0.0
+
+
+@st.cache_data(ttl=3600)
+def load_pe_history(symbol_name: str) -> pd.DataFrame:
+    """
+    加载指数历史 PE 数据（乐咕乐股数据源）
+    Args:
+        symbol_name: 指数名称（如"创业板50"、"上证红利"）
+    Returns:
+        DataFrame with columns: ['date', 'pe']
+    """
+    try:
+        df = ak.stock_index_pe_lg(symbol=symbol_name)
+        result = df[['日期', '滚动市盈率']].copy()
+        result.columns = ['date', 'pe']
+        result['date'] = pd.to_datetime(result['date'])
+        result['pe'] = result['pe'].astype(float)
+        return result
+    except Exception as e:
+        st.error(f"加载 {symbol_name} PE 数据失败: {e}")
+        return pd.DataFrame(columns=['date', 'pe'])
+
+
+def calculate_pe_percentile(pe_series: pd.Series, window: int = 250) -> pd.Series:
+    """
+    计算 PE 的历史百分位（使用扩展窗口以利用所有可用数据）
+    Args:
+        pe_series: PE 序列
+        window: 最小窗口（交易日），实际会使用 min_periods=window 的扩展窗口
+    Returns:
+        百分位序列（0~1）
+    """
+    # 使用扩展窗口，至少需要 window 个数据点才开始计算
+    rolling_rank = pe_series.expanding(min_periods=window).rank(pct=True)
+    return rolling_rank
+
+
+def load_pe_data_for_strategy() -> dict:
+    """
+    加载策略所需的两个指数 PE 数据
+    Returns:
+        dict with keys: 'cy', 'hl'
+        value: DataFrame with columns ['date', 'pe', 'pe_percentile']
+    """
+    from config import STRATEGY_CONFIG
+
+    result = {}
+    pe_window = STRATEGY_CONFIG.get('pe_window', 250)
+
+    for key, symbol_name in STRATEGY_CONFIG['pe_symbol_map'].items():
+        df = load_pe_history(symbol_name)
+        if not df.empty:
+            df['pe_percentile'] = calculate_pe_percentile(df['pe'], pe_window)
+            result[key] = df
+        else:
+            result[key] = pd.DataFrame(columns=['date', 'pe', 'pe_percentile'])
+
+    return result

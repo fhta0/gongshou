@@ -9,10 +9,10 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
 from config import STRATEGY_CONFIG
-from data_loader import load_merged_data, get_realtime_change
+from data_loader import load_merged_data, get_realtime_change, load_pe_data_for_strategy
 from strategy import (
     calculate_signal, calculate_smoothed_momentum,
-    calculate_ratio_percentile, calculate_momentum_percentile
+    calculate_ratio_percentile, calculate_momentum_percentile, apply_pe_filter
 )
 from backtester import run_backtest, calculate_statistics
 
@@ -322,7 +322,36 @@ def render_realtime_card(merged_data: pd.DataFrame):
     else:
         days_since_switch = 999
 
-    display, new_state, event = calculate_signal(cy_mom_today, hl_mom_today, prev_state, days_since_switch)
+    # 加载 PE 估值数据
+    pe_data = load_pe_data_for_strategy()
+    cy_pe_pct_today = None
+    hl_pe_pct_today = None
+    cy_pe_value = None
+    hl_pe_value = None
+
+    if not pe_data['cy'].empty:
+        cy_pe_df = pe_data['cy'].dropna(subset=['pe_percentile'])
+        if not cy_pe_df.empty:
+            cy_pe_pct_today = cy_pe_df['pe_percentile'].iloc[-1]
+            cy_pe_value = cy_pe_df['pe'].iloc[-1]
+
+    if not pe_data['hl'].empty:
+        hl_pe_df = pe_data['hl'].dropna(subset=['pe_percentile'])
+        if not hl_pe_df.empty:
+            hl_pe_pct_today = hl_pe_df['pe_percentile'].iloc[-1]
+            hl_pe_value = hl_pe_df['pe'].iloc[-1]
+
+    # 是否启用估值过滤
+    apply_pe_filter_flag = STRATEGY_CONFIG.get('apply_pe_filter', True)
+    pe_threshold = STRATEGY_CONFIG.get('pe_percentile_threshold', 0.80)
+
+    display, new_state, event = calculate_signal(
+        cy_mom_today, hl_mom_today, prev_state, days_since_switch,
+        cy_pe_pct=cy_pe_pct_today,
+        hl_pe_pct=hl_pe_pct_today,
+        apply_pe_filter_flag=apply_pe_filter_flag,
+        pe_threshold=pe_threshold
+    )
 
     # 计算百分位（用于衰减退出 + 展示，纳入今日盘中实时修正）
     mom_pct_window = STRATEGY_CONFIG['momentum_percentile_window']
@@ -350,6 +379,18 @@ def render_realtime_card(merged_data: pd.DataFrame):
         display = {'signal': '空仓', 'color': 'red', 'emoji': '⚪',
                    'description': f'动量衰竭退出（红利动量百分位 {hl_mom_pct_today:.0%} < {decay_threshold:.0%}）',
                    'action': '空仓观望'}
+
+    # 估值过滤触发提示
+    pe_filter_triggered = False
+    if apply_pe_filter_flag:
+        # 检查是否因为估值过高被过滤
+        # 注意：这里需要在 calculate_signal 之后再检查
+        # 如果原信号是 cy/hl 但被估值过滤改为 cash，event 会是 exit
+        # 我们通过检查 PE 百分位来判断是否触发了估值过滤
+        if cy_pe_pct_today is not None and cy_pe_pct_today > pe_threshold:
+            pe_filter_triggered = True
+        if hl_pe_pct_today is not None and hl_pe_pct_today > pe_threshold:
+            pe_filter_triggered = True
 
     # 波动率目标仓位缩放（与回测对齐）
     vol_lookback = STRATEGY_CONFIG.get('vol_lookback', 60)
@@ -487,6 +528,56 @@ def render_realtime_card(merged_data: pd.DataFrame):
     </div>
     """, unsafe_allow_html=True)
 
+    # 估值状态展示
+    if apply_pe_filter_flag:
+        st.markdown('<div class="section-title">📊 估值状态</div>', unsafe_allow_html=True)
+        val_col1, val_col2 = st.columns(2)
+
+        with val_col1:
+            if cy_pe_pct_today is not None:
+                # 估值状态标签
+                if cy_pe_pct_today < 0.30:
+                    pe_status = "🟢 低估"
+                    status_color = "green"
+                elif cy_pe_pct_today < 0.70:
+                    pe_status = "🟡 适中"
+                    status_color = "orange"
+                else:
+                    pe_status = "🔴 高估"
+                    status_color = "red"
+
+                st.metric(
+                    label=f"创业板 PE {pe_status}",
+                    value=f"{cy_pe_value:.2f}" if cy_pe_value is not None else "N/A",
+                    help=f"PE 百分位: {cy_pe_pct_today:.1%} (阈值: {pe_threshold:.0%})"
+                )
+            else:
+                st.metric(label="创业板 PE", value="数据不足")
+
+        with val_col2:
+            if hl_pe_pct_today is not None:
+                if hl_pe_pct_today < 0.30:
+                    pe_status = "🟢 低估"
+                    status_color = "green"
+                elif hl_pe_pct_today < 0.70:
+                    pe_status = "🟡 适中"
+                    status_color = "orange"
+                else:
+                    pe_status = "🔴 高估"
+                    status_color = "red"
+
+                st.metric(
+                    label=f"红利 PE {pe_status}",
+                    value=f"{hl_pe_value:.2f}" if hl_pe_value is not None else "N/A",
+                    help=f"PE 百分位: {hl_pe_pct_today:.1%} (阈值: {pe_threshold:.0%})"
+                )
+            else:
+                st.metric(label="红利 PE", value="数据不足")
+
+        # 估值过滤提示
+        if pe_filter_triggered:
+            st.info(f"⚠️ 估值过滤已启用：PE 百分位 > {pe_threshold:.0%} 的指数不会被推荐买入")
+
     # 策略说明
     with st.expander("📖 策略说明"):
         st.markdown(f"""
@@ -497,6 +588,7 @@ def render_realtime_card(merged_data: pd.DataFrame):
         - 📊 **平滑方式**：取 {momentum_windows} 天动量的均值，减少单一窗口因基准价跳变导致的信号不稳定
         - 🛡️ **动量衰竭退出**：持仓标的动量百分位 < {decay_threshold:.0%} 时强制空仓（阈值 {decay_threshold:.0%}）
         - 📉 **波动率目标仓位**：目标年化波动率 {target_vol:.0%}，回看 {vol_lookback} 天实现波动率，仓位 = min(目标/实现, 100%)
+        - 💰 **估值过滤**：当推荐买入的指数 PE 百分位 > {pe_threshold:.0%} 时，改为空仓（避免高估追涨）
         """)
 
     if event and event['type'] == 'entry':
