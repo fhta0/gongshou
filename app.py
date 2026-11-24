@@ -8,7 +8,7 @@ import numpy as np
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
-from config import STRATEGY_CONFIG
+from config import STRATEGY_CONFIG, VERSION
 from data_loader import load_merged_data, get_realtime_change, load_pe_data_for_strategy
 from strategy import (
     calculate_signal, calculate_smoothed_momentum,
@@ -18,15 +18,15 @@ from backtester import run_backtest, calculate_statistics
 
 
 st.set_page_config(
-    page_title="双动量信号系统",
+    page_title=f"双动量信号系统 v{VERSION}",
     page_icon="📊",
     layout="wide"
 )
 
 # 强制覆盖浏览器标题（确保不显示 Streamlit 字样）
-st.markdown("""
+st.markdown(f"""
 <script>
-    document.title = "双动量信号系统";
+    document.title = "双动量信号系统 v{VERSION}";
 </script>
 """, unsafe_allow_html=True)
 
@@ -196,7 +196,7 @@ def _render_hero_header(last_update: str):
     """渲染页面顶部 hero 区域"""
     st.markdown(f"""
     <div class="hero-header">
-        <h1>📊 双动量信号系统</h1>
+        <h1>📊 双动量信号系统 <span style="font-size: 0.6em; opacity: 0.7;">v{VERSION}</span></h1>
         <div class="subtitle">创业板 / 中证红利 · 动量轮动策略 · 数据截至 {last_update}</div>
     </div>
     """, unsafe_allow_html=True)
